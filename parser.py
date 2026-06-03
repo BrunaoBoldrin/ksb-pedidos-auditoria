@@ -78,27 +78,32 @@ def processar_pdf(PDF_PATH):
         if len(datas) > 0 else ""
     )
 
-    # ====================================
-    # UNIDADE
-    # ====================================
+# ====================================
+# UNIDADE
+# ====================================
 
-    unidade = ""
+unidade = ""
 
-    unidade_match = re.search(
+# JUNDIAI
 
-        r"Endereço de entrega:.*?KSB Brasil Ltda\.?\s*([A-Za-zÀ-Úà-ú\s]+)",
+if re.search(
+    r"Jundiai",
+    texto_completo,
+    re.IGNORECASE
+):
 
-        texto_completo,
-        re.DOTALL
-    )
+    unidade = "Jundiai"
 
-    if unidade_match:
+# VARZEA
 
-        unidade = (
-            unidade_match.group(1)
-            .split("\n")[0]
-            .strip()
-        )
+elif re.search(
+    r"Varzea",
+    texto_completo,
+    re.IGNORECASE
+):
+
+    unidade = "Varzea Paulista"
+
 
     # ====================================
     # COMPRADOR
