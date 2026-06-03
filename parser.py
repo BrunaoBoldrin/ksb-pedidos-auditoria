@@ -4,6 +4,7 @@ import pandas as pd
 
 from datetime import datetime
 
+
 # ====================================
 # FUNCOES AUXILIARES
 # ====================================
@@ -21,8 +22,8 @@ def moeda_para_float(valor):
         return float(valor)
 
     except:
-
         return 0.0
+
 
 # ====================================
 # PROCESSAR PDF
@@ -367,9 +368,9 @@ def processar_pdf(PDF_PATH):
 
             divergencias.append(
 
-                f"""NCM divergente
-(Esperado: {ncm_correto}
-| Encontrado: {ncm})"""
+                f"NCM divergente "
+                f"(Esperado: {ncm_correto} | "
+                f"Encontrado: {ncm})"
             )
 
         # ====================================
@@ -429,10 +430,10 @@ def processar_pdf(PDF_PATH):
 
             divergencias.append(
 
-                f"""Valor divergente
-(Calculado: {valor_calculado}
-| Pedido: {valor_total_float}
-| Diferença: {round(diferenca, 2)})"""
+                f"Valor divergente "
+                f"(Calculado: {valor_calculado} | "
+                f"Pedido: {valor_total_float} | "
+                f"Diferença: {round(diferenca, 2)})"
             )
 
         # ====================================
