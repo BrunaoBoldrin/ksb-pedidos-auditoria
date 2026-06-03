@@ -78,32 +78,27 @@ def processar_pdf(PDF_PATH):
         if len(datas) > 0 else ""
     )
 
-# ====================================
-# UNIDADE
-# ====================================
+    # ====================================
+    # UNIDADE
+    # ====================================
 
-unidade = ""
+    unidade = ""
 
-# JUNDIAI
+    if re.search(
+        r"Jundiai",
+        texto_completo,
+        re.IGNORECASE
+    ):
 
-if re.search(
-    r"Jundiai",
-    texto_completo,
-    re.IGNORECASE
-):
+        unidade = "Jundiai"
 
-    unidade = "Jundiai"
+    elif re.search(
+        r"Varzea",
+        texto_completo,
+        re.IGNORECASE
+    ):
 
-# VARZEA
-
-elif re.search(
-    r"Varzea",
-    texto_completo,
-    re.IGNORECASE
-):
-
-    unidade = "Varzea Paulista"
-
+        unidade = "Varzea Paulista"
 
     # ====================================
     # COMPRADOR
