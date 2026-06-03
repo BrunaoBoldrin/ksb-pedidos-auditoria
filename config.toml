@@ -1,0 +1,7 @@
+[server]
+maxUploadSize = 200
+enableXsrfProtection = false
+enableCORS = false
+headless = true
+port = 3000
+address = "0.0.0.0"
