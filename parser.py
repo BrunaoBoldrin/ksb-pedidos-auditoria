@@ -62,20 +62,28 @@ def processar_pdf(PDF_PATH):
 
     data_emissao = datas[0] if len(datas) > 0 else ""
 
-    # ====================================
-    # UNIDADE
-    # ====================================
 
-    unidade = ""
+# ====================================
+# UNIDADE
+# ====================================
 
-    unidade_match = re.search(
-        r"Endereço de entrega:.*?KSB Brasil Ltda\.\s*([A-Za-zÀ-Úà-ú\s]+)-",
-        texto_completo,
-        re.DOTALL,
+unidade = ""
+
+unidade_match = re.search(
+
+    r"Endereço de entrega:.*?KSB Brasil Ltda\.?\s*([A-Za-zÀ-Úà-ú\s]+)",
+
+    texto_completo,
+    re.DOTALL
+)
+
+if unidade_match:
+
+    unidade = (
+        unidade_match.group(1)
+        .split("\n")[0]
+        .strip()
     )
-
-    if unidade_match:
-        unidade = unidade_match.group(1).strip()
 
     # ====================================
     # COMPRADOR
