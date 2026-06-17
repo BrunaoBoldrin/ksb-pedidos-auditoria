@@ -311,10 +311,13 @@ def processar_pdf(PDF_PATH):
         # VALOR UNITARIO
         # ====================================
 
-        valor_unitario_match = re.search(
-            r"(\d+,\d+\/1)",
-            bloco
-        )
+    
+valor_unitario_match = re.search(
+    r"(\d{1,3}(?:\.\d{3})*,\d{2}\/1)",
+    bloco
+)
+
+
 
         valor_unitario = (
             valor_unitario_match.group(1)
@@ -337,10 +340,13 @@ def processar_pdf(PDF_PATH):
 
                 break
 
-        valores_linha = re.findall(
-            r"(\d{1,3}(?:\.\d{3})*,\d{2})",
-            linha_item
-        )
+        
+valores_linha = re.findall(
+    r"(\d{1,3}(?:\.\d{3})*,\d{2})",
+    linha_item
+)
+
+
 
         if len(valores_linha) > 0:
 
