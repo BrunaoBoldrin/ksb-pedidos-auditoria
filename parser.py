@@ -344,16 +344,17 @@ def processar_pdf(PDF_PATH):
                 break
 
         
-valores_linha = re.findall(
-    r"(\d{1,3}(?:\.\d{3})*,\d{2})",
-    linha_item
-)
 
-
+        valores_linha = re.findall(
+            r"(\d{1,3}(?:\.\d{3})*,\d{2})",
+            linha_item
+        )
 
         if len(valores_linha) > 0:
 
             valor_total = valores_linha[-1]
+
+
 
         # ====================================
         # VALIDACOES
