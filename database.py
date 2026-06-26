@@ -236,6 +236,47 @@ def buscar_material(codigo):
         return cursor.fetchone()
 
 
+def buscar_material_por_codigo(codigo_material):
+    with _cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                codigo_material,
+                descricao,
+                material,
+                norma,
+                ncm,
+                unidade_medida,
+                codigo_interno_jundiai,
+                codigo_interno_varzea,
+                preco_revisado,
+                data_ultima_revisao,
+                usuario_ultima_revisao_preco
+            FROM materiais
+            WHERE codigo_material = %s
+            """,
+            (codigo_material,),
+        )
+        linha = cursor.fetchone()
+
+    if not linha:
+        return None
+
+    return {
+        "codigo_material": linha[0],
+        "descricao": linha[1],
+        "material": linha[2],
+        "norma": linha[3],
+        "ncm": linha[4],
+        "unidade_medida": linha[5],
+        "codigo_interno_jundiai": linha[6],
+        "codigo_interno_varzea": linha[7],
+        "preco_unitario_liquido": linha[8],
+        "data_ultima_revisao": linha[9],
+        "usuario_ultima_revisao_preco": linha[10],
+    }
+
+
 def atualizar_material(
     codigo_material,
     descricao,
@@ -316,15 +357,7 @@ def listar_regras_fiscais():
         return cursor.fetchall()
 
 
-def inserir_regra_fiscal(
-    palavra_chave,
-    material,
-    ncm,
-    aliquota_icms,
-    aliquota_ipi,
-    observacao,
-    ativo=1,
-):
+def inserir_regra_fiscal(palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo=1):
     with _cursor(commit=True) as cursor:
         cursor.execute(
             """
@@ -343,16 +376,7 @@ def buscar_regra_fiscal(id_regra):
         return cursor.fetchone()
 
 
-def atualizar_regra_fiscal(
-    id_regra,
-    palavra_chave,
-    material,
-    ncm,
-    aliquota_icms,
-    aliquota_ipi,
-    observacao,
-    ativo,
-):
+def atualizar_regra_fiscal(id_regra, palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo):
     with _cursor(commit=True) as cursor:
         cursor.execute(
             """
@@ -397,6 +421,34 @@ def localizar_regra_fiscal(descricao, material):
             return {"ncm": regra[2], "icms": regra[3], "ipi": regra[4]}
 
     return None
+
+
+def localizar_regra_fiscal_por_ncm(ncm):
+    with _cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT ncm, aliquota_icms, aliquota_ipi, palavra_chave, material, observacao
+            FROM regras_fiscais
+            WHERE ativo = 1
+            AND REPLACE(REPLACE(ncm, '.', ''), ' ', '') = REPLACE(REPLACE(%s, '.', ''), ' ', '')
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(ncm),),
+        )
+        linha = cursor.fetchone()
+
+    if not linha:
+        return None
+
+    return {
+        "ncm": linha[0],
+        "icms": linha[1],
+        "ipi": linha[2],
+        "palavra_chave": linha[3],
+        "material": linha[4],
+        "observacao": linha[5],
+    }
 
 
 def inserir_usuario(nome, usuario, senha, perfil):
