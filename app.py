@@ -1,10 +1,12 @@
 from datetime import date
+import re
 
 import pandas as pd
 import streamlit as st
 
 from database import (
     atualizar_material,
+    atualizar_regra_fiscal,
     buscar_material,
     buscar_usuario_login,
     conectar,
@@ -17,7 +19,6 @@ from database import (
     listar_materiais_completo,
     listar_regras_fiscais,
     listar_usuarios,
-    atualizar_regra_fiscal,
 )
 from parser import processar_pdf
 
@@ -32,9 +33,96 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ====================================
-# LOGIN
-# ====================================
+
+def limpar_texto(valor):
+    if pd.isna(valor):
+        return ""
+    texto = str(valor).strip()
+    if texto.lower() in ["nan", "none", "nat"]:
+        return ""
+    return texto
+
+
+def normalizar_coluna(nome):
+    nome = str(nome).replace("\n", " ").replace("\r", " ").strip().lower()
+    nome = re.sub(r"\s+", " ", nome)
+    troca = str.maketrans("áàãâäéèêëíìîïóòõôöúùûüç", "aaaaaeeeeiiiiooooouuuuc")
+    return nome.translate(troca)
+
+
+def moeda_para_float_importacao(valor):
+    texto = limpar_texto(valor)
+    if not texto or texto == "-":
+        return 0.0
+    texto = texto.replace("R$", "").replace(" ", "").strip()
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    try:
+        return float(texto)
+    except Exception:
+        return 0.0
+
+
+def preparar_planilha_materiais(arquivo_excel):
+    abas = pd.read_excel(arquivo_excel, sheet_name=None, dtype=str)
+    partes = []
+    relatorio_abas = []
+
+    aliases = {
+        "codigo": ["codigo material", "cod material", "codigo_material", "código material"],
+        "descricao": ["descricao", "descrição"],
+        "material": ["material"],
+        "norma": ["norma"],
+        "ncm": ["ncm"],
+        "unidade": ["unidade"],
+        "jundiai": ["codigo interno jundiai", "código interno jundiaí", "codigo interno jundiaí"],
+        "varzea": ["codigo interno varzea", "código interno várzea", "codigo interno várzea"],
+        "preco": ["preco unitario liquido", "preço unitário líquido", "preco revisado", "preço revisado"],
+    }
+
+    for nome_aba, df in abas.items():
+        if df.empty:
+            continue
+
+        df = df.dropna(how="all").copy()
+        mapa = {normalizar_coluna(col): col for col in df.columns}
+
+        def achar(campo):
+            for candidato in aliases[campo]:
+                chave = normalizar_coluna(candidato)
+                if chave in mapa:
+                    return mapa[chave]
+            return None
+
+        colunas = {campo: achar(campo) for campo in aliases}
+
+        if not colunas["codigo"] or not colunas["descricao"]:
+            relatorio_abas.append(f"{nome_aba}: ignorada, sem cabeçalho de Código Material/Descrição")
+            continue
+
+        dados = pd.DataFrame()
+        dados["Código Material"] = df[colunas["codigo"]].apply(limpar_texto)
+        dados["Descrição"] = df[colunas["descricao"]].apply(limpar_texto)
+        dados["Material"] = df[colunas["material"]].apply(limpar_texto) if colunas["material"] else ""
+        dados["Norma"] = df[colunas["norma"]].apply(limpar_texto) if colunas["norma"] else ""
+        dados["NCM"] = df[colunas["ncm"]].apply(limpar_texto) if colunas["ncm"] else ""
+        dados["Unidade"] = df[colunas["unidade"]].apply(limpar_texto) if colunas["unidade"] else ""
+        dados["Código Interno Jundiaí"] = df[colunas["jundiai"]].apply(limpar_texto) if colunas["jundiai"] else ""
+        dados["Código Interno Várzea"] = df[colunas["varzea"]].apply(limpar_texto) if colunas["varzea"] else ""
+        dados["Preço Unitário Líquido"] = df[colunas["preco"]].apply(moeda_para_float_importacao) if colunas["preco"] else 0.0
+        dados = dados[dados["Código Material"] != ""]
+
+        if not dados.empty:
+            partes.append(dados)
+            relatorio_abas.append(f"{nome_aba}: {len(dados)} linha(s) válida(s)")
+
+    if not partes:
+        return pd.DataFrame(), relatorio_abas
+
+    final = pd.concat(partes, ignore_index=True)
+    final = final.drop_duplicates(subset=["Código Material"], keep="last")
+    return final, relatorio_abas
+
 
 for chave in ["usuario_logado", "nome_usuario", "perfil_usuario"]:
     if chave not in st.session_state:
@@ -44,7 +132,6 @@ if st.session_state.usuario_logado is None:
     st.title("🔐 Login")
     usuario = st.text_input("Usuário")
     senha = st.text_input("Senha", type="password")
-
     if st.button("Entrar"):
         resultado = buscar_usuario_login(usuario, senha)
         if resultado:
@@ -69,14 +156,7 @@ with st.sidebar:
         st.rerun()
 
 if perfil == "ADMIN":
-    opcoes_menu = [
-        "📄 Análise de Pedidos KSB",
-        "📦 Itens Cadastrados",
-        "🏛 Regras Fiscais",
-        "📋 Histórico de Auditorias",
-        "👤 Usuários",
-        "🛠️ Ferramentas Administrativas",
-    ]
+    opcoes_menu = ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados", "🏛 Regras Fiscais", "📋 Histórico de Auditorias", "👤 Usuários", "🛠️ Ferramentas Administrativas"]
 elif perfil == "VENDEDORA":
     opcoes_menu = ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados", "📋 Histórico de Auditorias"]
 elif perfil == "PROCESSISTA":
@@ -87,29 +167,21 @@ else:
 menu = st.sidebar.radio("Menu", opcoes_menu)
 pode_editar_materiais = perfil in ["ADMIN", "PROCESSISTA"]
 
-# ====================================
-# ANÁLISE
-# ====================================
-
 if menu == "📄 Análise de Pedidos KSB":
     st.title("📄 Analisador de Pedidos KSB")
     st.write("Sistema de extração e auditoria automática de pedidos.")
-
     uploaded_files = st.file_uploader("Selecione os PDFs", type=["pdf"], accept_multiple_files=True)
 
     if uploaded_files:
         st.success(f"{len(uploaded_files)} PDF(s) carregado(s)")
-
         if st.button("🚀 PROCESSAR PEDIDOS"):
             todos_dados = []
             todas_analises = []
             progress = st.progress(0)
-
             with st.spinner("Processando PDFs..."):
                 for idx, arquivo in enumerate(uploaded_files):
                     with open(arquivo.name, "wb") as f:
                         f.write(arquivo.getbuffer())
-
                     df_dados, df_analise = processar_pdf(arquivo.name)
                     todos_dados.append(df_dados)
                     todas_analises.append(df_analise)
@@ -117,78 +189,36 @@ if menu == "📄 Análise de Pedidos KSB":
 
             df_final = pd.concat(todos_dados, ignore_index=True)
             df_analise_final = pd.concat(todas_analises, ignore_index=True)
-
-            total_itens = len(df_analise_final)
-            total_ok = len(df_analise_final[df_analise_final["Status"] == "OK"])
-            total_div = len(df_analise_final[df_analise_final["Status"] == "DIVERGENTE"])
-
             col1, col2, col3 = st.columns(3)
-            col1.metric("Itens Processados", total_itens)
-            col2.metric("Itens OK", total_ok)
-            col3.metric("Itens Divergentes", total_div)
-
+            col1.metric("Itens Processados", len(df_analise_final))
+            col2.metric("Itens OK", len(df_analise_final[df_analise_final["Status"] == "OK"]))
+            col3.metric("Itens Divergentes", len(df_analise_final[df_analise_final["Status"] == "DIVERGENTE"]))
             st.divider()
             st.subheader("📋 Auditoria")
-
             if "Divergencias" in df_analise_final.columns:
                 df_analise_final["Divergencias"] = df_analise_final["Divergencias"].astype(str).str.replace("|", "\n")
-
             st.dataframe(df_analise_final, use_container_width=True, height=400)
-
             st.divider()
             st.subheader("📦 Dados Extraídos")
             st.dataframe(df_final, use_container_width=True)
-
-            csv = df_final.to_csv(index=False, sep=";").encode("utf-8-sig")
-            st.download_button("📥 Download CSV", csv, "pedidos_extraidos.csv", "text/csv")
-
+            st.download_button("📥 Download CSV", df_final.to_csv(index=False, sep=";").encode("utf-8-sig"), "pedidos_extraidos.csv", "text/csv")
             excel_path = "pedidos_extraidos.xlsx"
             with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
                 df_final.to_excel(writer, index=False, sheet_name="Pedidos")
                 df_analise_final.to_excel(writer, index=False, sheet_name="Auditoria")
-
             with open(excel_path, "rb") as f:
-                st.download_button(
-                    "📥 Download Excel",
-                    f,
-                    "pedidos_extraidos.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-
+                st.download_button("📥 Download Excel", f, "pedidos_extraidos.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             st.success("Processamento concluído com sucesso!")
-
-# ====================================
-# MATERIAIS
-# ====================================
 
 elif menu == "📦 Itens Cadastrados":
     st.title("📦 Itens Cadastrados")
+    for chave, valor in [("modo_material", None), ("material_em_edicao", None), ("confirmar_exclusao", False), ("mostrar_importacao", False)]:
+        if chave not in st.session_state:
+            st.session_state[chave] = valor
 
-    if "modo_material" not in st.session_state:
-        st.session_state.modo_material = None
-    if "material_em_edicao" not in st.session_state:
-        st.session_state.material_em_edicao = None
-    if "confirmar_exclusao" not in st.session_state:
-        st.session_state.confirmar_exclusao = False
-    if "mostrar_importacao" not in st.session_state:
-        st.session_state.mostrar_importacao = False
-
-    lista_materiais = listar_materiais_completo()
     df_materiais = pd.DataFrame(
-        lista_materiais,
-        columns=[
-            "Código Material",
-            "Descrição",
-            "Material",
-            "Norma",
-            "NCM",
-            "Unidade",
-            "Código Interno Jundiaí",
-            "Código Interno Várzea",
-            "Preço Unitário Líquido",
-            "Última Revisão",
-            "Usuário Última Revisão",
-        ],
+        listar_materiais_completo(),
+        columns=["Código Material", "Descrição", "Material", "Norma", "NCM", "Unidade", "Código Interno Jundiaí", "Código Interno Várzea", "Preço Unitário Líquido", "Última Revisão", "Usuário Última Revisão"],
     )
 
     filtro_material = st.text_input("Pesquisar material", placeholder="Código, descrição ou código interno...")
@@ -200,6 +230,9 @@ elif menu == "📦 Itens Cadastrados":
             | df_materiais["Código Interno Jundiaí"].astype(str).str.contains(p, case=False, na=False)
             | df_materiais["Código Interno Várzea"].astype(str).str.contains(p, case=False, na=False)
         ]
+    elif not filtro_material and len(df_materiais) > 300:
+        st.caption("Exibindo os primeiros 300 registros. Use a pesquisa para localizar um material específico.")
+        df_materiais = df_materiais.head(300)
 
     if df_materiais.empty:
         st.info("Nenhum item cadastrado.")
@@ -211,7 +244,6 @@ elif menu == "📦 Itens Cadastrados":
 
     st.divider()
     col_importar, col_novo, col_editar, col_excluir = st.columns(4)
-
     with col_importar:
         if st.button("📥 Importar Excel", disabled=not pode_editar_materiais):
             st.session_state.mostrar_importacao = True
@@ -258,45 +290,54 @@ elif menu == "📦 Itens Cadastrados":
         arquivo_excel = st.file_uploader("Selecione o arquivo Excel", type=["xlsx"], key="upload_excel")
         if arquivo_excel is not None:
             try:
-                df_importacao = pd.read_excel(arquivo_excel)
-                st.dataframe(df_importacao, use_container_width=True)
-                if st.button("🚀 Importar Materiais"):
-                    inseridos = 0
-                    atualizados = 0
-                    data_auto = date.today().isoformat()
-                    preco_coluna = "Preço Unitário Líquido" if "Preço Unitário Líquido" in df_importacao.columns else "Preço Revisado"
-                    for _, linha in df_importacao.iterrows():
-                        codigo = str(linha["Código Material"])
-                        args = (
-                            codigo,
-                            str(linha["Descrição"]),
-                            str(linha["Material"]),
-                            str(linha["Norma"]),
-                            str(linha["NCM"]),
-                            str(linha["Unidade"]),
-                            str(linha["Código Interno Jundiaí"]),
-                            str(linha["Código Interno Várzea"]),
-                            float(linha[preco_coluna]),
-                            data_auto,
-                            usuario_revisao_atual,
-                        )
-                        if buscar_material(codigo):
-                            atualizar_material(*args)
-                            atualizados += 1
-                        else:
-                            inserir_material(*args)
-                            inseridos += 1
-                    st.success(f"Importação concluída! {inseridos} inseridos e {atualizados} atualizados.")
-                    st.session_state.mostrar_importacao = False
-                    st.rerun()
+                df_importacao, relatorio_abas = preparar_planilha_materiais(arquivo_excel)
+                for item in relatorio_abas:
+                    st.caption(item)
+                if df_importacao.empty:
+                    st.warning("Nenhuma linha válida foi encontrada para importação.")
+                else:
+                    st.success(f"Arquivo lido com {len(df_importacao)} material(is) válido(s).")
+                    st.dataframe(df_importacao.head(20), use_container_width=True)
+                    st.caption("Pré-visualização limitada a 20 linhas para evitar estouro de memória no Render Free.")
+                    if st.button("🚀 Importar Materiais"):
+                        inseridos = 0
+                        atualizados = 0
+                        data_auto = date.today().isoformat()
+                        barra = st.progress(0)
+                        total = len(df_importacao)
+                        for idx, linha in df_importacao.iterrows():
+                            codigo = limpar_texto(linha["Código Material"])
+                            args = (
+                                codigo,
+                                limpar_texto(linha["Descrição"]),
+                                limpar_texto(linha["Material"]),
+                                limpar_texto(linha["Norma"]),
+                                limpar_texto(linha["NCM"]),
+                                limpar_texto(linha["Unidade"]),
+                                limpar_texto(linha["Código Interno Jundiaí"]),
+                                limpar_texto(linha["Código Interno Várzea"]),
+                                moeda_para_float_importacao(linha["Preço Unitário Líquido"]),
+                                data_auto,
+                                usuario_revisao_atual,
+                            )
+                            if buscar_material(codigo):
+                                atualizar_material(*args)
+                                atualizados += 1
+                            else:
+                                inserir_material(*args)
+                                inseridos += 1
+                            if total:
+                                barra.progress(min(int(((idx + 1) / total) * 100), 100))
+                        st.success(f"Importação concluída! {inseridos} inseridos e {atualizados} atualizados.")
+                        st.session_state.mostrar_importacao = False
+                        st.rerun()
             except Exception as erro:
-                st.error(f"Erro ao ler Excel: {erro}")
+                st.error(f"Erro ao importar Excel: {erro}")
 
     if st.session_state.modo_material is not None:
         st.divider()
         m = st.session_state.material_em_edicao
         st.subheader("➕ Novo Material" if st.session_state.modo_material == "novo" else "✏️ Editar Material")
-
         codigo = st.text_input("Código Material KSB", value="" if m is None else m["Código Material"], disabled=st.session_state.modo_material == "editar")
         descricao = st.text_input("Descrição", value="" if m is None else m["Descrição"])
         material = st.text_input("Material", value="" if m is None else m["Material"])
@@ -309,7 +350,6 @@ elif menu == "📦 Itens Cadastrados":
         data_auto = date.today().isoformat()
         st.text_input("Data Última Revisão", value=data_auto, disabled=True)
         st.text_input("Usuário Última Revisão", value=str(usuario_revisao_atual), disabled=True)
-
         c1, c2 = st.columns(2)
         with c1:
             if st.button("💾 Salvar"):
@@ -329,27 +369,15 @@ elif menu == "📦 Itens Cadastrados":
                 st.session_state.material_em_edicao = None
                 st.rerun()
 
-# ====================================
-# REGRAS FISCAIS - SOMENTE NCM
-# ====================================
-
 elif menu == "🏛 Regras Fiscais":
     st.title("🏛 Regras Fiscais")
-
-    if "modo_regra" not in st.session_state:
-        st.session_state.modo_regra = None
-    if "regra_em_edicao" not in st.session_state:
-        st.session_state.regra_em_edicao = None
-    if "confirmar_exclusao_regra" not in st.session_state:
-        st.session_state.confirmar_exclusao_regra = False
-
-    lista_regras = listar_regras_fiscais()
-    df_regras = pd.DataFrame(lista_regras, columns=["ID", "NCM", "ICMS", "IPI", "Observação", "Ativo"])
-
+    for chave, valor in [("modo_regra", None), ("regra_em_edicao", None), ("confirmar_exclusao_regra", False)]:
+        if chave not in st.session_state:
+            st.session_state[chave] = valor
+    df_regras = pd.DataFrame(listar_regras_fiscais(), columns=["ID", "NCM", "ICMS", "IPI", "Observação", "Ativo"])
     filtro_regra = st.text_input("Pesquisar regra", placeholder="NCM", key="filtro_regra")
     if filtro_regra and not df_regras.empty:
         df_regras = df_regras[df_regras["NCM"].astype(str).str.contains(filtro_regra.strip(), case=False, na=False)]
-
     if df_regras.empty:
         st.info("Nenhuma regra fiscal cadastrada.")
         regras_selecionadas = pd.DataFrame()
@@ -357,10 +385,8 @@ elif menu == "🏛 Regras Fiscais":
         df_regras.insert(0, "Selecionar", False)
         tabela_regras = st.data_editor(df_regras, use_container_width=True, hide_index=True)
         regras_selecionadas = tabela_regras[tabela_regras["Selecionar"] == True]
-
     st.divider()
     col_nova, col_editar, col_excluir = st.columns(3)
-
     with col_nova:
         if st.button("➕ Nova Regra", key="btn_nova_regra"):
             st.session_state.modo_regra = "novo"
@@ -368,9 +394,7 @@ elif menu == "🏛 Regras Fiscais":
             st.rerun()
     with col_editar:
         if st.button("✏️ Editar Regra", key="btn_editar_regra"):
-            if regras_selecionadas.empty:
-                st.warning("Selecione uma regra.")
-            elif len(regras_selecionadas) > 1:
+            if len(regras_selecionadas) != 1:
                 st.warning("Selecione apenas uma regra.")
             else:
                 st.session_state.modo_regra = "editar"
@@ -382,7 +406,6 @@ elif menu == "🏛 Regras Fiscais":
                 st.warning("Selecione ao menos uma regra.")
             else:
                 st.session_state.confirmar_exclusao_regra = True
-
     if st.session_state.confirmar_exclusao_regra and not regras_selecionadas.empty:
         st.warning(f"⚠ Deseja excluir {len(regras_selecionadas)} regra(s)?")
         c1, c2 = st.columns(2)
@@ -397,18 +420,15 @@ elif menu == "🏛 Regras Fiscais":
             if st.button("❌ Cancelar Exclusão", key="cancelar_delete_regra"):
                 st.session_state.confirmar_exclusao_regra = False
                 st.rerun()
-
     if st.session_state.modo_regra is not None:
         regra = st.session_state.regra_em_edicao
         st.divider()
         st.subheader("➕ Nova Regra Fiscal" if st.session_state.modo_regra == "novo" else "✏️ Editar Regra Fiscal")
-
         ncm = st.text_input("NCM", value="" if regra is None else str(regra["NCM"]), key="rf_ncm")
         icms = st.number_input("ICMS (%)", value=18.0 if regra is None else float(regra["ICMS"]), key="rf_icms")
         ipi = st.number_input("IPI (%)", value=5.0 if regra is None else float(regra["IPI"]), key="rf_ipi")
         observacao = st.text_area("Observação", value="" if regra is None else str(regra["Observação"]), key="rf_obs")
         ativo = 1
-
         c1, c2 = st.columns(2)
         with c1:
             if st.button("💾 Salvar Regra", key="btn_salvar_regra"):
@@ -426,224 +446,125 @@ elif menu == "🏛 Regras Fiscais":
                 st.session_state.regra_em_edicao = None
                 st.rerun()
 
-# ====================================
-# USUÁRIOS
-# ====================================
-
 elif menu == "👤 Usuários":
     st.title("👤 Usuários")
     if perfil != "ADMIN":
         st.error("Acesso negado.")
         st.stop()
-
     def atualizar_usuario(id_usuario, nome, usuario, perfil_usuario, ativo):
-        conn = conectar()
-        cursor = conn.cursor()
+        conn = conectar(); cursor = conn.cursor()
         try:
-            cursor.execute(
-                "UPDATE usuarios SET nome=%s, usuario=%s, perfil=%s, ativo=%s WHERE id=%s",
-                (nome, usuario, perfil_usuario, ativo, id_usuario),
-            )
-            conn.commit()
+            cursor.execute("UPDATE usuarios SET nome=%s, usuario=%s, perfil=%s, ativo=%s WHERE id=%s", (nome, usuario, perfil_usuario, ativo, id_usuario)); conn.commit()
         except Exception:
-            conn.rollback()
-            raise
+            conn.rollback(); raise
         finally:
-            cursor.close()
-            conn.close()
-
+            cursor.close(); conn.close()
     def alterar_status_usuario(id_usuario, ativo):
-        conn = conectar()
-        cursor = conn.cursor()
+        conn = conectar(); cursor = conn.cursor()
         try:
-            cursor.execute("UPDATE usuarios SET ativo=%s WHERE id=%s", (ativo, id_usuario))
-            conn.commit()
+            cursor.execute("UPDATE usuarios SET ativo=%s WHERE id=%s", (ativo, id_usuario)); conn.commit()
         finally:
-            cursor.close()
-            conn.close()
-
+            cursor.close(); conn.close()
     def alterar_senha_usuario(id_usuario, nova_senha):
-        conn = conectar()
-        cursor = conn.cursor()
+        conn = conectar(); cursor = conn.cursor()
         try:
-            cursor.execute("UPDATE usuarios SET senha=%s WHERE id=%s", (nova_senha, id_usuario))
-            conn.commit()
+            cursor.execute("UPDATE usuarios SET senha=%s WHERE id=%s", (nova_senha, id_usuario)); conn.commit()
         finally:
-            cursor.close()
-            conn.close()
-
-    if "modo_usuario" not in st.session_state:
-        st.session_state.modo_usuario = None
-    if "usuario_em_edicao" not in st.session_state:
-        st.session_state.usuario_em_edicao = None
-
+            cursor.close(); conn.close()
+    for chave in ["modo_usuario", "usuario_em_edicao"]:
+        if chave not in st.session_state:
+            st.session_state[chave] = None
     df_usuarios = pd.DataFrame(listar_usuarios(), columns=["ID", "Nome", "Usuário", "Perfil", "Ativo"])
     if not df_usuarios.empty:
         df_usuarios["Status"] = df_usuarios["Ativo"].apply(lambda x: "Ativo" if int(x) == 1 else "Bloqueado")
         df_usuarios = df_usuarios[["ID", "Nome", "Usuário", "Perfil", "Status", "Ativo"]]
-
     filtro = st.text_input("Pesquisar usuário", placeholder="Nome, usuário ou perfil", key="filtro_usuario")
     if filtro and not df_usuarios.empty:
         p = filtro.strip()
-        df_usuarios = df_usuarios[
-            df_usuarios["Nome"].astype(str).str.contains(p, case=False, na=False)
-            | df_usuarios["Usuário"].astype(str).str.contains(p, case=False, na=False)
-            | df_usuarios["Perfil"].astype(str).str.contains(p, case=False, na=False)
-        ]
-
+        df_usuarios = df_usuarios[df_usuarios["Nome"].astype(str).str.contains(p, case=False, na=False) | df_usuarios["Usuário"].astype(str).str.contains(p, case=False, na=False) | df_usuarios["Perfil"].astype(str).str.contains(p, case=False, na=False)]
     if df_usuarios.empty:
-        st.info("Nenhum usuário cadastrado.")
-        usuarios_selecionados = pd.DataFrame()
+        st.info("Nenhum usuário cadastrado."); usuarios_selecionados = pd.DataFrame()
     else:
         df_usuarios.insert(0, "Selecionar", False)
         tabela_usuarios = st.data_editor(df_usuarios, use_container_width=True, hide_index=True, disabled=["ID", "Nome", "Usuário", "Perfil", "Status", "Ativo"])
         usuarios_selecionados = tabela_usuarios[tabela_usuarios["Selecionar"] == True]
-
-    st.divider()
-    c1, c2, c3, c4, c5 = st.columns(5)
+    st.divider(); c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         if st.button("➕ Novo Usuário"):
-            st.session_state.modo_usuario = "novo"
-            st.session_state.usuario_em_edicao = None
-            st.rerun()
+            st.session_state.modo_usuario = "novo"; st.session_state.usuario_em_edicao = None; st.rerun()
     with c2:
         if st.button("✏️ Editar Usuário"):
-            if len(usuarios_selecionados) != 1:
-                st.warning("Selecione apenas um usuário.")
-            else:
-                st.session_state.modo_usuario = "editar"
-                st.session_state.usuario_em_edicao = usuarios_selecionados.iloc[0]
-                st.rerun()
+            if len(usuarios_selecionados) != 1: st.warning("Selecione apenas um usuário.")
+            else: st.session_state.modo_usuario = "editar"; st.session_state.usuario_em_edicao = usuarios_selecionados.iloc[0]; st.rerun()
     with c3:
         if st.button("🔒 Bloquear/Ativar"):
-            if len(usuarios_selecionados) != 1:
-                st.warning("Selecione apenas um usuário.")
+            if len(usuarios_selecionados) != 1: st.warning("Selecione apenas um usuário.")
             else:
                 u = usuarios_selecionados.iloc[0]
-                if str(u["Usuário"]) == str(st.session_state.usuario_logado):
-                    st.warning("Você não pode bloquear o próprio usuário logado.")
-                else:
-                    alterar_status_usuario(int(u["ID"]), 0 if int(u["Ativo"]) == 1 else 1)
-                    st.rerun()
+                if str(u["Usuário"]) == str(st.session_state.usuario_logado): st.warning("Você não pode bloquear o próprio usuário logado.")
+                else: alterar_status_usuario(int(u["ID"]), 0 if int(u["Ativo"]) == 1 else 1); st.rerun()
     with c4:
         if st.button("🔑 Redefinir Senha"):
-            if len(usuarios_selecionados) != 1:
-                st.warning("Selecione apenas um usuário.")
-            else:
-                st.session_state.modo_usuario = "senha"
-                st.session_state.usuario_em_edicao = usuarios_selecionados.iloc[0]
-                st.rerun()
+            if len(usuarios_selecionados) != 1: st.warning("Selecione apenas um usuário.")
+            else: st.session_state.modo_usuario = "senha"; st.session_state.usuario_em_edicao = usuarios_selecionados.iloc[0]; st.rerun()
     with c5:
         if st.button("🗑️ Excluir Usuário"):
-            if len(usuarios_selecionados) != 1:
-                st.warning("Selecione apenas um usuário.")
+            if len(usuarios_selecionados) != 1: st.warning("Selecione apenas um usuário.")
             else:
                 u = usuarios_selecionados.iloc[0]
-                if str(u["Usuário"]) == str(st.session_state.usuario_logado):
-                    st.warning("Você não pode excluir o próprio usuário logado.")
-                else:
-                    st.session_state.modo_usuario = "excluir"
-                    st.session_state.usuario_em_edicao = u
-                    st.rerun()
-
-    modo = st.session_state.modo_usuario
-    u = st.session_state.usuario_em_edicao
-
+                if str(u["Usuário"]) == str(st.session_state.usuario_logado): st.warning("Você não pode excluir o próprio usuário logado.")
+                else: st.session_state.modo_usuario = "excluir"; st.session_state.usuario_em_edicao = u; st.rerun()
+    modo = st.session_state.modo_usuario; u = st.session_state.usuario_em_edicao
     if modo in ["novo", "editar"]:
-        st.divider()
-        st.subheader("➕ Novo Usuário" if modo == "novo" else "✏️ Editar Usuário")
+        st.divider(); st.subheader("➕ Novo Usuário" if modo == "novo" else "✏️ Editar Usuário")
         with st.form("form_usuario"):
-            nome = st.text_input("Nome", value="" if u is None else str(u["Nome"]))
-            usuario = st.text_input("Usuário", value="" if u is None else str(u["Usuário"]))
-            senha = st.text_input("Senha", type="password") if modo == "novo" else ""
-            perfis = ["ADMIN", "VENDEDORA", "PROCESSISTA"]
-            perfil_idx = 0 if u is None or str(u["Perfil"]) not in perfis else perfis.index(str(u["Perfil"]))
-            perfil_novo = st.selectbox("Perfil", perfis, index=perfil_idx)
+            nome = st.text_input("Nome", value="" if u is None else str(u["Nome"])); usuario = st.text_input("Usuário", value="" if u is None else str(u["Usuário"])); senha = st.text_input("Senha", type="password") if modo == "novo" else ""
+            perfis = ["ADMIN", "VENDEDORA", "PROCESSISTA"]; perfil_idx = 0 if u is None or str(u["Perfil"]) not in perfis else perfis.index(str(u["Perfil"])); perfil_novo = st.selectbox("Perfil", perfis, index=perfil_idx)
             status = st.selectbox("Status", ["Ativo", "Bloqueado"], index=0 if u is None or int(u["Ativo"]) == 1 else 1)
-            salvar = st.form_submit_button("💾 Salvar")
-            cancelar = st.form_submit_button("❌ Cancelar")
-
+            salvar = st.form_submit_button("💾 Salvar"); cancelar = st.form_submit_button("❌ Cancelar")
             if salvar:
-                if not nome or not usuario or (modo == "novo" and not senha):
-                    st.warning("Preencha os campos obrigatórios.")
+                if not nome or not usuario or (modo == "novo" and not senha): st.warning("Preencha os campos obrigatórios.")
                 else:
                     ativo = 1 if status == "Ativo" else 0
                     if modo == "novo":
                         inserir_usuario(nome, usuario, senha, perfil_novo)
                         for reg in listar_usuarios():
-                            if str(reg[2]) == str(usuario):
-                                alterar_status_usuario(int(reg[0]), ativo)
-                                break
+                            if str(reg[2]) == str(usuario): alterar_status_usuario(int(reg[0]), ativo); break
                     else:
                         atualizar_usuario(int(u["ID"]), nome, usuario, perfil_novo, ativo)
-                    st.session_state.modo_usuario = None
-                    st.session_state.usuario_em_edicao = None
-                    st.rerun()
-            if cancelar:
-                st.session_state.modo_usuario = None
-                st.session_state.usuario_em_edicao = None
-                st.rerun()
-
+                    st.session_state.modo_usuario = None; st.session_state.usuario_em_edicao = None; st.rerun()
+            if cancelar: st.session_state.modo_usuario = None; st.session_state.usuario_em_edicao = None; st.rerun()
     elif modo == "senha":
-        st.divider()
-        st.subheader("🔑 Redefinir Senha")
+        st.divider(); st.subheader("🔑 Redefinir Senha")
         with st.form("form_senha"):
-            nova = st.text_input("Nova senha", type="password")
-            confirma = st.text_input("Confirmar nova senha", type="password")
-            salvar = st.form_submit_button("💾 Salvar nova senha")
-            cancelar = st.form_submit_button("❌ Cancelar")
+            nova = st.text_input("Nova senha", type="password"); confirma = st.text_input("Confirmar nova senha", type="password"); salvar = st.form_submit_button("💾 Salvar nova senha"); cancelar = st.form_submit_button("❌ Cancelar")
             if salvar:
-                if not nova or nova != confirma:
-                    st.warning("As senhas não conferem.")
-                else:
-                    alterar_senha_usuario(int(u["ID"]), nova)
-                    st.session_state.modo_usuario = None
-                    st.session_state.usuario_em_edicao = None
-                    st.rerun()
-            if cancelar:
-                st.session_state.modo_usuario = None
-                st.session_state.usuario_em_edicao = None
-                st.rerun()
-
+                if not nova or nova != confirma: st.warning("As senhas não conferem.")
+                else: alterar_senha_usuario(int(u["ID"]), nova); st.session_state.modo_usuario = None; st.session_state.usuario_em_edicao = None; st.rerun()
+            if cancelar: st.session_state.modo_usuario = None; st.session_state.usuario_em_edicao = None; st.rerun()
     elif modo == "excluir":
-        st.divider()
-        st.warning(f"Confirma excluir o usuário {u['Usuário']}?")
-        c1, c2 = st.columns(2)
+        st.divider(); st.warning(f"Confirma excluir o usuário {u['Usuário']}?"); c1, c2 = st.columns(2)
         with c1:
-            if st.button("✅ Confirmar Exclusão"):
-                excluir_usuario(int(u["ID"]))
-                st.session_state.modo_usuario = None
-                st.session_state.usuario_em_edicao = None
-                st.rerun()
+            if st.button("✅ Confirmar Exclusão"): excluir_usuario(int(u["ID"])); st.session_state.modo_usuario = None; st.session_state.usuario_em_edicao = None; st.rerun()
         with c2:
-            if st.button("❌ Cancelar Exclusão"):
-                st.session_state.modo_usuario = None
-                st.session_state.usuario_em_edicao = None
-                st.rerun()
+            if st.button("❌ Cancelar Exclusão"): st.session_state.modo_usuario = None; st.session_state.usuario_em_edicao = None; st.rerun()
 
 elif menu == "🛠️ Ferramentas Administrativas":
     st.title("🛠️ Ferramentas Administrativas")
-    if perfil != "ADMIN":
-        st.error("Acesso negado.")
-        st.stop()
+    if perfil != "ADMIN": st.error("Acesso negado."); st.stop()
     st.warning("Área restrita. Use apenas para manutenção do sistema.")
     with st.expander("🗄️ Migração SQLite → PostgreSQL/Neon", expanded=False):
-        st.write("Origem: database.db")
-        st.write("Destino: banco PostgreSQL configurado nas variáveis de ambiente")
-        limpar_destino = st.checkbox("Limpar dados atuais do PostgreSQL antes de migrar", value=False)
-        confirmacao = st.text_input("Digite MIGRAR para liberar o botão", value="")
+        st.write("Origem: database.db"); st.write("Destino: banco PostgreSQL configurado nas variáveis de ambiente")
+        limpar_destino = st.checkbox("Limpar dados atuais do PostgreSQL antes de migrar", value=False); confirmacao = st.text_input("Digite MIGRAR para liberar o botão", value="")
         if confirmacao == "MIGRAR" and st.button("🚀 Executar Migração"):
             try:
                 from migrar_sqlite_para_postgres import migrar
-
                 with st.spinner("Migrando dados..."):
                     totais = migrar(sqlite_path="database.db", limpar=limpar_destino)
                 st.success("Migração concluída com sucesso.")
-                for tabela, total in totais.items():
-                    st.write(f"{tabela}: {total} registro(s) migrado(s)")
+                for tabela, total in totais.items(): st.write(f"{tabela}: {total} registro(s) migrado(s)")
             except Exception as erro:
-                st.error("Erro ao executar migração.")
-                st.exception(erro)
+                st.error("Erro ao executar migração."); st.exception(erro)
 
 elif menu == "📋 Histórico de Auditorias":
     st.title("📋 Histórico de Auditorias")
