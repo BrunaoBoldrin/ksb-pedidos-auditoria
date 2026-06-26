@@ -21,6 +21,7 @@ from database import (
 
 import streamlit as st
 import pandas as pd
+from datetime import date
 
 from database import localizar_regra_fiscal
 from parser import processar_pdf
@@ -438,6 +439,7 @@ elif menu == "📦 Itens Cadastrados":
                 if st.button("🚀 Importar Materiais", key="btn_confirmar_importacao"):
                     contador_inseridos = 0
                     contador_atualizados = 0
+                    data_revisao_automatica = date.today().isoformat()
 
                     for _, linha in df_importacao.iterrows():
                         codigo_material = str(linha["Código Material"])
@@ -447,12 +449,6 @@ elif menu == "📦 Itens Cadastrados":
                             "Preço Unitário Líquido"
                             if "Preço Unitário Líquido" in df_importacao.columns
                             else "Preço Revisado"
-                        )
-
-                        data_coluna = (
-                            "Data Revisão"
-                            if "Data Revisão" in df_importacao.columns
-                            else "Última Revisão"
                         )
 
                         if material_existente:
@@ -466,7 +462,7 @@ elif menu == "📦 Itens Cadastrados":
                                 str(linha["Código Interno Jundiaí"]),
                                 str(linha["Código Interno Várzea"]),
                                 float(linha[preco_coluna]),
-                                str(linha[data_coluna]),
+                                data_revisao_automatica,
                                 usuario_revisao_atual
                             )
                             contador_atualizados += 1
@@ -481,7 +477,7 @@ elif menu == "📦 Itens Cadastrados":
                                 str(linha["Código Interno Jundiaí"]),
                                 str(linha["Código Interno Várzea"]),
                                 float(linha[preco_coluna]),
-                                str(linha[data_coluna]),
+                                data_revisao_automatica,
                                 usuario_revisao_atual
                             )
                             contador_inseridos += 1
@@ -560,9 +556,14 @@ elif menu == "📦 Itens Cadastrados":
             key="cad_preco_unitario_liquido"
         )
 
-        data_revisao = st.date_input(
+        data_revisao_automatica = date.today().isoformat()
+
+        st.text_input(
             "Data Última Revisão",
-            key="cad_data"
+            value=data_revisao_automatica,
+            disabled=True,
+            help="Data preenchida automaticamente pelo sistema no momento do salvamento.",
+            key="cad_data_ultima_revisao_bloqueada"
         )
 
         usuario_ultima_revisao = st.text_input(
@@ -587,7 +588,7 @@ elif menu == "📦 Itens Cadastrados":
                         codigo_interno_jundiai,
                         codigo_interno_varzea,
                         preco_unitario_liquido,
-                        str(data_revisao),
+                        data_revisao_automatica,
                         usuario_revisao_atual
                     )
                     st.success("Material cadastrado com sucesso!")
@@ -602,7 +603,7 @@ elif menu == "📦 Itens Cadastrados":
                         codigo_interno_jundiai,
                         codigo_interno_varzea,
                         preco_unitario_liquido,
-                        str(data_revisao),
+                        data_revisao_automatica,
                         usuario_revisao_atual
                     )
                     st.success("Material atualizado com sucesso!")
