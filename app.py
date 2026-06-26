@@ -635,9 +635,9 @@ elif menu == "🏛 Regras Fiscais":
 
     df_regras = pd.DataFrame(
         lista_regras,
-        columns=["ID", "Palavra Chave", "Material", "NCM", "ICMS", "IPI", "Observação", "Ativo"]
+        columns=["ID", "NCM", "ICMS", "IPI", "Observação", "Ativo"]
     )
-
+    
     filtro_regra = st.text_input(
         "Pesquisar regra",
         placeholder="Palavra chave, material ou NCM",
