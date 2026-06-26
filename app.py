@@ -11,6 +11,7 @@ from database import (
     excluir_regra_fiscal,
     buscar_regra_fiscal,
     localizar_regra_fiscal,
+    conectar,
     buscar_usuario_login,
     listar_usuarios,
     inserir_usuario,
@@ -144,9 +145,7 @@ with st.sidebar:
     if st.button("🚪 Logout"):
 
         st.session_state.usuario_logado = None
-
         st.session_state.nome_usuario = None
-
         st.session_state.perfil_usuario = None
 
         st.rerun()
@@ -208,6 +207,7 @@ menu = st.sidebar.radio(
 )
 
 pode_editar_materiais = perfil in ["ADMIN", "PROCESSISTA"]
+
 
 # ====================================
 # ANALISE DE PEDIDOS
@@ -592,7 +592,6 @@ elif menu == "📦 Itens Cadastrados":
         tabela_materiais["Selecionar"] == True
     ]
     
-
 
 
     # ====================================
@@ -1460,9 +1459,150 @@ elif menu == "👤 Usuários":
 
         st.stop()
 
+    # ====================================
+    # FUNÇÕES LOCAIS DO CRUD
+    # ====================================
+
+    def atualizar_usuario(
+        id_usuario,
+        nome,
+        usuario,
+        perfil_usuario,
+        ativo
+    ):
+
+        conn = conectar()
+        cursor = conn.cursor()
+
+        try:
+
+            cursor.execute(
+                """
+                UPDATE usuarios
+                SET
+                    nome = %s,
+                    usuario = %s,
+                    perfil = %s,
+                    ativo = %s
+                WHERE id = %s
+                """,
+                (
+                    nome,
+                    usuario,
+                    perfil_usuario,
+                    ativo,
+                    id_usuario
+                )
+            )
+
+            conn.commit()
+
+        except Exception:
+
+            conn.rollback()
+            raise
+
+        finally:
+
+            cursor.close()
+            conn.close()
+
+
+    def alterar_status_usuario(
+        id_usuario,
+        ativo
+    ):
+
+        conn = conectar()
+        cursor = conn.cursor()
+
+        try:
+
+            cursor.execute(
+                """
+                UPDATE usuarios
+                SET ativo = %s
+                WHERE id = %s
+                """,
+                (
+                    ativo,
+                    id_usuario
+                )
+            )
+
+            conn.commit()
+
+        except Exception:
+
+            conn.rollback()
+            raise
+
+        finally:
+
+            cursor.close()
+            conn.close()
+
+
+    def alterar_senha_usuario(
+        id_usuario,
+        nova_senha
+    ):
+
+        conn = conectar()
+        cursor = conn.cursor()
+
+        try:
+
+            cursor.execute(
+                """
+                UPDATE usuarios
+                SET senha = %s
+                WHERE id = %s
+                """,
+                (
+                    nova_senha,
+                    id_usuario
+                )
+            )
+
+            conn.commit()
+
+        except Exception:
+
+            conn.rollback()
+            raise
+
+        finally:
+
+            cursor.close()
+            conn.close()
+
+
+    def usuario_selecionado_eh_logado(
+        linha_usuario
+    ):
+
+        return (
+            str(linha_usuario["Usuário"])
+            == str(st.session_state.usuario_logado)
+        )
+
+
+    # ====================================
+    # SESSION STATE
+    # ====================================
+
     if "modo_usuario" not in st.session_state:
 
         st.session_state.modo_usuario = None
+
+    if "usuario_em_edicao" not in st.session_state:
+
+        st.session_state.usuario_em_edicao = None
+
+    # ====================================
+    # CONSULTA BANCO
+    # ====================================
 
     usuarios = listar_usuarios()
 
@@ -1476,6 +1616,69 @@ elif menu == "👤 Usuários":
             "Ativo"
         ]
     )
+
+    if not df_usuarios.empty:
+
+        df_usuarios["Status"] = df_usuarios["Ativo"].apply(
+            lambda x: "Ativo" if int(x) == 1 else "Bloqueado"
+        )
+
+        df_usuarios = df_usuarios[
+            [
+                "ID",
+                "Nome",
+                "Usuário",
+                "Perfil",
+                "Status",
+                "Ativo"
+            ]
+        ]
+
+    filtro_usuario = st.text_input(
+        "Pesquisar usuário",
+        placeholder="Nome, usuário ou perfil",
+        key="filtro_usuario"
+    )
+
+    if filtro_usuario and not df_usuarios.empty:
+
+        pesquisa_usuario = filtro_usuario.strip()
+
+        df_usuarios = df_usuarios[
+
+            df_usuarios["Nome"]
+            .astype(str)
+            .str.contains(
+                pesquisa_usuario,
+                case=False,
+                na=False
+            )
+
+            |
+
+            df_usuarios["Usuário"]
+            .astype(str)
+            .str.contains(
+                pesquisa_usuario,
+                case=False,
+                na=False
+            )
+
+            |
+
+            df_usuarios["Perfil"]
+            .astype(str)
+            .str.contains(
+                pesquisa_usuario,
+                case=False,
+                na=False
+            )
+
+        ]
+
+    # ====================================
+    # TABELA
+    # ====================================
 
     if df_usuarios.empty:
 
@@ -1494,7 +1697,16 @@ elif menu == "👤 Usuários":
         tabela_usuarios = st.data_editor(
             df_usuarios,
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
+            disabled=[
+                "ID",
+                "Nome",
+                "Usuário",
+                "Perfil",
+                "Status",
+                "Ativo"
+            ],
+            key="tabela_usuarios"
         )
 
         usuarios_selecionados = tabela_usuarios[
@@ -1503,19 +1715,31 @@ elif menu == "👤 Usuários":
 
     st.divider()
 
-    col_novo_usuario, col_excluir_usuario = st.columns(2)
+    # ====================================
+    # BOTÕES
+    # ====================================
 
-    with col_novo_usuario:
+    col_novo, col_editar, col_status, col_senha, col_excluir = st.columns(5)
 
-        if st.button("➕ Novo Usuário"):
+    with col_novo:
+
+        if st.button(
+            "➕ Novo Usuário",
+            key="btn_novo_usuario"
+        ):
 
             st.session_state.modo_usuario = "novo"
 
+            st.session_state.usuario_em_edicao = None
+
             st.rerun()
 
-    with col_excluir_usuario:
+    with col_editar:
 
-        if st.button("🗑️ Excluir Usuário"):
+        if st.button(
+            "✏️ Editar Usuário",
+            key="btn_editar_usuario"
+        ):
 
             if usuarios_selecionados.empty:
 
@@ -1527,76 +1751,455 @@ elif menu == "👤 Usuários":
 
             else:
 
-                usuario_id = int(
-                    usuarios_selecionados.iloc[0]["ID"]
+                st.session_state.modo_usuario = "editar"
+
+                st.session_state.usuario_em_edicao = (
+                    usuarios_selecionados.iloc[0]
                 )
-
-                excluir_usuario(usuario_id)
-
-                st.success("Usuário excluído com sucesso.")
 
                 st.rerun()
 
-    if st.session_state.modo_usuario == "novo":
+    with col_status:
+
+        if st.button(
+            "🔒 Bloquear/Ativar",
+            key="btn_status_usuario"
+        ):
+
+            if usuarios_selecionados.empty:
+
+                st.warning("Selecione um usuário.")
+
+            elif len(usuarios_selecionados) > 1:
+
+                st.warning("Selecione apenas um usuário.")
+
+            else:
+
+                linha_usuario = usuarios_selecionados.iloc[0]
+
+                if usuario_selecionado_eh_logado(
+                    linha_usuario
+                ):
+
+                    st.warning(
+                        "Você não pode bloquear o próprio usuário logado."
+                    )
+
+                else:
+
+                    novo_status = (
+                        0
+                        if int(linha_usuario["Ativo"]) == 1
+                        else 1
+                    )
+
+                    alterar_status_usuario(
+                        int(linha_usuario["ID"]),
+                        novo_status
+                    )
+
+                    st.success("Status alterado com sucesso.")
+
+                    st.rerun()
+
+    with col_senha:
+
+        if st.button(
+            "🔑 Redefinir Senha",
+            key="btn_redefinir_senha"
+        ):
+
+            if usuarios_selecionados.empty:
+
+                st.warning("Selecione um usuário.")
+
+            elif len(usuarios_selecionados) > 1:
+
+                st.warning("Selecione apenas um usuário.")
+
+            else:
+
+                st.session_state.modo_usuario = "senha"
+
+                st.session_state.usuario_em_edicao = (
+                    usuarios_selecionados.iloc[0]
+                )
+
+                st.rerun()
+
+    with col_excluir:
+
+        if st.button(
+            "🗑️ Excluir Usuário",
+            key="btn_excluir_usuario"
+        ):
+
+            if usuarios_selecionados.empty:
+
+                st.warning("Selecione um usuário.")
+
+            elif len(usuarios_selecionados) > 1:
+
+                st.warning("Selecione apenas um usuário.")
+
+            else:
+
+                linha_usuario = usuarios_selecionados.iloc[0]
+
+                if usuario_selecionado_eh_logado(
+                    linha_usuario
+                ):
+
+                    st.warning(
+                        "Você não pode excluir o próprio usuário logado."
+                    )
+
+                else:
+
+                    st.session_state.modo_usuario = "excluir"
+
+                    st.session_state.usuario_em_edicao = linha_usuario
+
+                    st.rerun()
+
+    # ====================================
+    # FORMULÁRIO NOVO / EDITAR
+    # ====================================
+
+    if st.session_state.modo_usuario in [
+        "novo",
+        "editar"
+    ]:
 
         st.divider()
 
-        st.subheader("➕ Novo Usuário")
+        usuario_em_edicao = st.session_state.get(
+            "usuario_em_edicao"
+        )
 
-        with st.form("form_novo_usuario"):
+        if st.session_state.modo_usuario == "novo":
 
-            nome = st.text_input("Nome")
+            st.subheader("➕ Novo Usuário")
 
-            usuario = st.text_input("Usuário")
+        else:
 
-            senha = st.text_input(
-                "Senha",
-                type="password"
+            st.subheader("✏️ Editar Usuário")
+
+        with st.form("form_usuario"):
+
+            nome = st.text_input(
+                "Nome",
+                value=""
+                if usuario_em_edicao is None
+                else str(usuario_em_edicao["Nome"])
             )
+
+            usuario = st.text_input(
+                "Usuário",
+                value=""
+                if usuario_em_edicao is None
+                else str(usuario_em_edicao["Usuário"])
+            )
+
+            senha = ""
+
+            if st.session_state.modo_usuario == "novo":
+
+                senha = st.text_input(
+                    "Senha",
+                    type="password"
+                )
+
+            perfis = [
+                "ADMIN",
+                "VENDEDORA",
+                "PROCESSISTA"
+            ]
+
+            perfil_padrao = 0
+
+            if usuario_em_edicao is not None:
+
+                perfil_atual = str(usuario_em_edicao["Perfil"])
+
+                if perfil_atual in perfis:
+
+                    perfil_padrao = perfis.index(
+                        perfil_atual
+                    )
 
             perfil_novo = st.selectbox(
                 "Perfil",
-                [
-                    "ADMIN",
-                    "VENDEDORA",
-                    "PROCESSISTA"
-                ]
+                perfis,
+                index=perfil_padrao
+            )
+
+            status_opcoes = [
+                "Ativo",
+                "Bloqueado"
+            ]
+
+            status_index = 0
+
+            if (
+                usuario_em_edicao is not None
+                and int(usuario_em_edicao["Ativo"]) == 0
+            ):
+
+                status_index = 1
+
+            status = st.selectbox(
+                "Status",
+                status_opcoes,
+                index=status_index
             )
 
             col_salvar_usuario, col_cancelar_usuario = st.columns(2)
 
             with col_salvar_usuario:
 
-                salvar_usuario = st.form_submit_button("💾 Salvar")
+                salvar_usuario = st.form_submit_button(
+                    "💾 Salvar"
+                )
 
             with col_cancelar_usuario:
 
-                cancelar_usuario = st.form_submit_button("❌ Cancelar")
+                cancelar_usuario = st.form_submit_button(
+                    "❌ Cancelar"
+                )
 
             if salvar_usuario:
 
-                if not nome or not usuario or not senha:
+                if not nome or not usuario:
 
-                    st.warning("Preencha nome, usuário e senha.")
+                    st.warning(
+                        "Preencha nome e usuário."
+                    )
+
+                elif (
+                    st.session_state.modo_usuario == "novo"
+                    and not senha
+                ):
+
+                    st.warning(
+                        "Preencha a senha."
+                    )
 
                 else:
 
-                    inserir_usuario(
-                        nome,
-                        usuario,
-                        senha,
-                        perfil_novo
-                    )
+                    ativo = 1 if status == "Ativo" else 0
 
-                    st.success("Usuário cadastrado com sucesso.")
+                    if (
+                        st.session_state.modo_usuario == "editar"
+                        and usuario_selecionado_eh_logado(
+                            usuario_em_edicao
+                        )
+                        and ativo == 0
+                    ):
 
-                    st.session_state.modo_usuario = None
+                        st.warning(
+                            "Você não pode bloquear o próprio usuário logado."
+                        )
 
-                    st.rerun()
+                    else:
+
+                        try:
+
+                            if st.session_state.modo_usuario == "novo":
+
+                                inserir_usuario(
+                                    nome,
+                                    usuario,
+                                    senha,
+                                    perfil_novo
+                                )
+
+                                usuarios_atualizados = listar_usuarios()
+
+                                for u in usuarios_atualizados:
+
+                                    if str(u[2]) == str(usuario):
+
+                                        alterar_status_usuario(
+                                            int(u[0]),
+                                            ativo
+                                        )
+
+                                        break
+
+                                st.success(
+                                    "Usuário cadastrado com sucesso."
+                                )
+
+                            else:
+
+                                atualizar_usuario(
+                                    int(usuario_em_edicao["ID"]),
+                                    nome,
+                                    usuario,
+                                    perfil_novo,
+                                    ativo
+                                )
+
+                                st.success(
+                                    "Usuário atualizado com sucesso."
+                                )
+
+                            st.session_state.modo_usuario = None
+
+                            st.session_state.usuario_em_edicao = None
+
+                            st.rerun()
+
+                        except Exception as erro:
+
+                            st.error(
+                                "Erro ao salvar usuário."
+                            )
+
+                            st.exception(erro)
 
             if cancelar_usuario:
 
                 st.session_state.modo_usuario = None
+
+                st.session_state.usuario_em_edicao = None
+
+                st.rerun()
+
+    # ====================================
+    # FORMULÁRIO SENHA
+    # ====================================
+
+    elif st.session_state.modo_usuario == "senha":
+
+        st.divider()
+
+        usuario_em_edicao = st.session_state.get(
+            "usuario_em_edicao"
+        )
+
+        st.subheader("🔑 Redefinir Senha")
+
+        st.write(
+            f"Usuário selecionado: **{usuario_em_edicao['Usuário']}**"
+        )
+
+        with st.form("form_redefinir_senha"):
+
+            nova_senha = st.text_input(
+                "Nova senha",
+                type="password"
+            )
+
+            confirmar_senha = st.text_input(
+                "Confirmar nova senha",
+                type="password"
+            )
+
+            col_salvar_senha, col_cancelar_senha = st.columns(2)
+
+            with col_salvar_senha:
+
+                salvar_senha = st.form_submit_button(
+                    "💾 Salvar nova senha"
+                )
+
+            with col_cancelar_senha:
+
+                cancelar_senha = st.form_submit_button(
+                    "❌ Cancelar"
+                )
+
+            if salvar_senha:
+
+                if not nova_senha:
+
+                    st.warning(
+                        "Informe a nova senha."
+                    )
+
+                elif nova_senha != confirmar_senha:
+
+                    st.warning(
+                        "As senhas não conferem."
+                    )
+
+                else:
+
+                    alterar_senha_usuario(
+                        int(usuario_em_edicao["ID"]),
+                        nova_senha
+                    )
+
+                    st.success(
+                        "Senha redefinida com sucesso."
+                    )
+
+                    st.session_state.modo_usuario = None
+
+                    st.session_state.usuario_em_edicao = None
+
+                    st.rerun()
+
+            if cancelar_senha:
+
+                st.session_state.modo_usuario = None
+
+                st.session_state.usuario_em_edicao = None
+
+                st.rerun()
+
+    # ====================================
+    # CONFIRMAÇÃO EXCLUSÃO
+    # ====================================
+
+    elif st.session_state.modo_usuario == "excluir":
+
+        st.divider()
+
+        usuario_em_edicao = st.session_state.get(
+            "usuario_em_edicao"
+        )
+
+        st.warning(
+            f"Confirma excluir o usuário {usuario_em_edicao['Usuário']}?"
+        )
+
+        col_confirmar_excluir, col_cancelar_excluir = st.columns(2)
+
+        with col_confirmar_excluir:
+
+            if st.button(
+                "✅ Confirmar Exclusão",
+                key="confirmar_excluir_usuario"
+            ):
+
+                excluir_usuario(
+                    int(usuario_em_edicao["ID"])
+                )
+
+                st.success(
+                    "Usuário excluído com sucesso."
+                )
+
+                st.session_state.modo_usuario = None
+
+                st.session_state.usuario_em_edicao = None
+
+                st.rerun()
+
+        with col_cancelar_excluir:
+
+            if st.button(
+                "❌ Cancelar Exclusão",
+                key="cancelar_excluir_usuario"
+            ):
+
+                st.session_state.modo_usuario = None
+
+                st.session_state.usuario_em_edicao = None
 
                 st.rerun()
 
@@ -1619,7 +2222,10 @@ elif menu == "🛠️ Ferramentas Administrativas":
         "Área restrita. Use apenas para manutenção do sistema."
     )
 
-    with st.expander("🗄️ Migração SQLite → PostgreSQL/Neon", expanded=False):
+    with st.expander(
+        "🗄️ Migração SQLite → PostgreSQL/Neon",
+        expanded=False
+    ):
 
         st.write("Origem: database.db")
         st.write("Destino: banco PostgreSQL configurado nas variáveis de ambiente")
@@ -1662,10 +2268,6 @@ elif menu == "🛠️ Ferramentas Administrativas":
                     st.error("Erro ao executar migração.")
 
                     st.exception(erro)
-
-        else:
-
-            st.info("Digite MIGRAR para habilitar o botão.")
 
 
 # ====================================
