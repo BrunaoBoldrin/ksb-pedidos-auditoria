@@ -139,8 +139,8 @@ def inicializar_banco():
             """
             CREATE TABLE IF NOT EXISTS regras_fiscais (
                 id SERIAL PRIMARY KEY,
-                palavra_chave TEXT NOT NULL,
-                material TEXT NOT NULL,
+                palavra_chave TEXT,
+                material TEXT,
                 ncm TEXT NOT NULL,
                 aliquota_icms DOUBLE PRECISION,
                 aliquota_ipi DOUBLE PRECISION,
@@ -149,6 +149,8 @@ def inicializar_banco():
             )
             """
         )
+        cursor.execute("ALTER TABLE regras_fiscais ALTER COLUMN palavra_chave DROP NOT NULL")
+        cursor.execute("ALTER TABLE regras_fiscais ALTER COLUMN material DROP NOT NULL")
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS usuarios (
@@ -180,19 +182,7 @@ def listar_materiais():
         return cursor.fetchall()
 
 
-def inserir_material(
-    codigo_material,
-    descricao,
-    material,
-    norma,
-    ncm,
-    unidade_medida,
-    codigo_interno_jundiai,
-    codigo_interno_varzea,
-    preco_revisado,
-    data_ultima_revisao,
-    usuario_ultima_revisao_preco=None,
-):
+def inserir_material(codigo_material, descricao, material, norma, ncm, unidade_medida, codigo_interno_jundiai, codigo_interno_varzea, preco_revisado, data_ultima_revisao, usuario_ultima_revisao_preco=None):
     with _cursor(commit=True) as cursor:
         cursor.execute(
             """
@@ -214,19 +204,7 @@ def inserir_material(
                 data_ultima_revisao = EXCLUDED.data_ultima_revisao,
                 usuario_ultima_revisao_preco = EXCLUDED.usuario_ultima_revisao_preco
             """,
-            (
-                codigo_material,
-                descricao,
-                material,
-                norma,
-                ncm,
-                unidade_medida,
-                codigo_interno_jundiai,
-                codigo_interno_varzea,
-                preco_revisado,
-                data_ultima_revisao,
-                usuario_ultima_revisao_preco,
-            ),
+            (codigo_material, descricao, material, norma, ncm, unidade_medida, codigo_interno_jundiai, codigo_interno_varzea, preco_revisado, data_ultima_revisao, usuario_ultima_revisao_preco),
         )
 
 
@@ -240,18 +218,9 @@ def buscar_material_por_codigo(codigo_material):
     with _cursor() as cursor:
         cursor.execute(
             """
-            SELECT
-                codigo_material,
-                descricao,
-                material,
-                norma,
-                ncm,
-                unidade_medida,
-                codigo_interno_jundiai,
-                codigo_interno_varzea,
-                preco_revisado,
-                data_ultima_revisao,
-                usuario_ultima_revisao_preco
+            SELECT codigo_material, descricao, material, norma, ncm, unidade_medida,
+                   codigo_interno_jundiai, codigo_interno_varzea, preco_revisado,
+                   data_ultima_revisao, usuario_ultima_revisao_preco
             FROM materiais
             WHERE codigo_material = %s
             """,
@@ -277,19 +246,7 @@ def buscar_material_por_codigo(codigo_material):
     }
 
 
-def atualizar_material(
-    codigo_material,
-    descricao,
-    material,
-    norma,
-    ncm,
-    unidade_medida,
-    codigo_interno_jundiai,
-    codigo_interno_varzea,
-    preco_revisado,
-    data_ultima_revisao,
-    usuario_ultima_revisao_preco=None,
-):
+def atualizar_material(codigo_material, descricao, material, norma, ncm, unidade_medida, codigo_interno_jundiai, codigo_interno_varzea, preco_revisado, data_ultima_revisao, usuario_ultima_revisao_preco=None):
     with _cursor(commit=True) as cursor:
         cursor.execute(
             """
@@ -306,19 +263,7 @@ def atualizar_material(
                 usuario_ultima_revisao_preco = COALESCE(%s, usuario_ultima_revisao_preco)
             WHERE codigo_material = %s
             """,
-            (
-                descricao,
-                material,
-                norma,
-                ncm,
-                unidade_medida,
-                codigo_interno_jundiai,
-                codigo_interno_varzea,
-                preco_revisado,
-                data_ultima_revisao,
-                usuario_ultima_revisao_preco,
-                codigo_material,
-            ),
+            (descricao, material, norma, ncm, unidade_medida, codigo_interno_jundiai, codigo_interno_varzea, preco_revisado, data_ultima_revisao, usuario_ultima_revisao_preco, codigo_material),
         )
 
 
@@ -349,48 +294,51 @@ def listar_regras_fiscais():
     with _cursor() as cursor:
         cursor.execute(
             """
-            SELECT id, palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo
+            SELECT id, ncm, aliquota_icms, aliquota_ipi, observacao, ativo
             FROM regras_fiscais
-            ORDER BY palavra_chave
+            ORDER BY ncm
             """
         )
         return cursor.fetchall()
 
 
-def inserir_regra_fiscal(palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo=1):
+def inserir_regra_fiscal(ncm, aliquota_icms, aliquota_ipi, observacao, ativo=1):
     with _cursor(commit=True) as cursor:
         cursor.execute(
             """
-            INSERT INTO regras_fiscais (
-                palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo
-            )
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO regras_fiscais (ncm, aliquota_icms, aliquota_ipi, observacao, ativo)
+            VALUES (%s,%s,%s,%s,%s)
             """,
-            (palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo),
+            (ncm, aliquota_icms, aliquota_ipi, observacao, ativo),
         )
 
 
 def buscar_regra_fiscal(id_regra):
     with _cursor() as cursor:
-        cursor.execute("SELECT * FROM regras_fiscais WHERE id = %s", (id_regra,))
+        cursor.execute(
+            """
+            SELECT id, ncm, aliquota_icms, aliquota_ipi, observacao, ativo
+            FROM regras_fiscais
+            WHERE id = %s
+            """,
+            (id_regra,),
+        )
         return cursor.fetchone()
 
 
-def atualizar_regra_fiscal(id_regra, palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo):
+def atualizar_regra_fiscal(id_regra, ncm, aliquota_icms, aliquota_ipi, observacao, ativo):
     with _cursor(commit=True) as cursor:
         cursor.execute(
             """
             UPDATE regras_fiscais
-            SET palavra_chave = %s,
-                material = %s,
-                ncm = %s,
+            SET ncm = %s,
                 aliquota_icms = %s,
                 aliquota_ipi = %s,
                 observacao = %s,
                 ativo = %s
             WHERE id = %s
             """,
-            (palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo, id_regra),
+            (ncm, aliquota_icms, aliquota_ipi, observacao, ativo, id_regra),
         )
 
 
@@ -400,26 +348,6 @@ def excluir_regra_fiscal(id_regra):
 
 
 def localizar_regra_fiscal(descricao, material):
-    with _cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT palavra_chave, material, ncm, aliquota_icms, aliquota_ipi
-            FROM regras_fiscais
-            WHERE ativo = 1
-            """
-        )
-        regras = cursor.fetchall()
-
-    descricao = str(descricao).upper()
-    material = str(material).upper()
-
-    for regra in regras:
-        palavra = str(regra[0]).upper()
-        material_regra = str(regra[1]).upper()
-
-        if palavra in descricao and material_regra in material:
-            return {"ncm": regra[2], "icms": regra[3], "ipi": regra[4]}
-
     return None
 
 
@@ -427,7 +355,7 @@ def localizar_regra_fiscal_por_ncm(ncm):
     with _cursor() as cursor:
         cursor.execute(
             """
-            SELECT ncm, aliquota_icms, aliquota_ipi, palavra_chave, material, observacao
+            SELECT ncm, aliquota_icms, aliquota_ipi, observacao
             FROM regras_fiscais
             WHERE ativo = 1
             AND REPLACE(REPLACE(ncm, '.', ''), ' ', '') = REPLACE(REPLACE(%s, '.', ''), ' ', '')
@@ -441,14 +369,7 @@ def localizar_regra_fiscal_por_ncm(ncm):
     if not linha:
         return None
 
-    return {
-        "ncm": linha[0],
-        "icms": linha[1],
-        "ipi": linha[2],
-        "palavra_chave": linha[3],
-        "material": linha[4],
-        "observacao": linha[5],
-    }
+    return {"ncm": linha[0], "icms": linha[1], "ipi": linha[2], "observacao": linha[3]}
 
 
 def inserir_usuario(nome, usuario, senha, perfil):
