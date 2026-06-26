@@ -1,8 +1,6 @@
-"""Camada de acesso a dados PostgreSQL/Supabase.
+"""Camada de acesso a dados PostgreSQL/Neon.
 
-Este módulo mantém as mesmas funções públicas usadas pelo ``app.py`` e pelo
-``parser.py``, mas substitui completamente o antigo backend SQLite por
-PostgreSQL via psycopg2.
+Mantém as funções públicas usadas pelo app.py e parser.py.
 """
 
 import os
@@ -15,14 +13,13 @@ _REQUIRED_ENV_VARS = ("DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD")
 
 
 def _get_db_config():
-    """Retorna a configuração do PostgreSQL a partir das variáveis de ambiente."""
     missing = [name for name in _REQUIRED_ENV_VARS if not os.environ.get(name)]
 
     if missing:
         raise RuntimeError(
             "Variáveis de ambiente do PostgreSQL ausentes: "
             + ", ".join(missing)
-            + ". Configure DB_HOST, DB_PORT, DB_NAME, DB_USER e DB_PASSWORD no Render/Supabase."
+            + ". Configure DB_HOST, DB_PORT, DB_NAME, DB_USER e DB_PASSWORD no Render."
         )
 
     return {
@@ -36,11 +33,6 @@ def _get_db_config():
 
 
 def conectar():
-    """Abre uma conexão com PostgreSQL/Supabase.
-
-    A assinatura foi mantida para preservar compatibilidade com o restante da
-    aplicação. O retorno continua sendo um objeto de conexão DB-API.
-    """
     return psycopg2.connect(**_get_db_config())
 
 
@@ -64,7 +56,6 @@ def _cursor(commit=False):
 
 
 def inicializar_banco():
-    """Cria as tabelas necessárias no PostgreSQL, caso ainda não existam."""
     with _cursor(commit=True) as cursor:
         cursor.execute(
             """
@@ -151,6 +142,23 @@ def inicializar_banco():
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id SERIAL PRIMARY KEY,
+                nome TEXT NOT NULL,
+                usuario TEXT NOT NULL UNIQUE,
+                senha TEXT NOT NULL,
+                perfil TEXT NOT NULL,
+                ativo INTEGER DEFAULT 1
+            )
+            """
+        )
+
+    try:
+        inserir_usuario("Administrador", "admin", "admin123", "ADMIN")
+    except Exception:
+        pass
 
 
 def listar_materiais():
@@ -185,6 +193,16 @@ def inserir_material(
                 codigo_interno_jundiai, codigo_interno_varzea, preco_revisado, data_ultima_revisao
             )
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (codigo_material) DO UPDATE SET
+                descricao = EXCLUDED.descricao,
+                material = EXCLUDED.material,
+                norma = EXCLUDED.norma,
+                ncm = EXCLUDED.ncm,
+                unidade_medida = EXCLUDED.unidade_medida,
+                codigo_interno_jundiai = EXCLUDED.codigo_interno_jundiai,
+                codigo_interno_varzea = EXCLUDED.codigo_interno_varzea,
+                preco_revisado = EXCLUDED.preco_revisado,
+                data_ultima_revisao = EXCLUDED.data_ultima_revisao
             """,
             (
                 codigo_material,
@@ -268,21 +286,7 @@ def listar_materiais_completo():
 
 
 def criar_tabela_regras_fiscais():
-    with _cursor(commit=True) as cursor:
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS regras_fiscais (
-                id SERIAL PRIMARY KEY,
-                palavra_chave TEXT NOT NULL,
-                material TEXT NOT NULL,
-                ncm TEXT NOT NULL,
-                aliquota_icms DOUBLE PRECISION,
-                aliquota_ipi DOUBLE PRECISION,
-                observacao TEXT,
-                ativo INTEGER DEFAULT 1
-            )
-            """
-        )
+    inicializar_banco()
 
 
 def listar_regras_fiscais():
@@ -377,18 +381,51 @@ def localizar_regra_fiscal(descricao, material):
         if palavra in descricao and material_regra in material:
             return {"ncm": regra[2], "icms": regra[3], "ipi": regra[4]}
 
-    try:
-        inserir_usuario(
-            "Administrador",
-            "admin",
-            "admin123",
-            "ADMIN",
+    return None
+
+
+def inserir_usuario(nome, usuario, senha, perfil):
+    with _cursor(commit=True) as cursor:
+        cursor.execute(
+            """
+            INSERT INTO usuarios (nome, usuario, senha, perfil)
+            VALUES (%s,%s,%s,%s)
+            """,
+            (nome, usuario, senha, perfil),
         )
-    except Exception:
-        pass
 
 
-# Em produção (Render), as variáveis já existem; garantir a estrutura no boot
-# evita que um banco Supabase recém-criado falhe na primeira chamada do app.
+def buscar_usuario_login(usuario, senha):
+    with _cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id, nome, usuario, perfil
+            FROM usuarios
+            WHERE usuario = %s
+            AND senha = %s
+            AND ativo = 1
+            """,
+            (usuario, senha),
+        )
+        return cursor.fetchone()
+
+
+def listar_usuarios():
+    with _cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id, nome, usuario, perfil, ativo
+            FROM usuarios
+            ORDER BY nome
+            """
+        )
+        return cursor.fetchall()
+
+
+def excluir_usuario(id_usuario):
+    with _cursor(commit=True) as cursor:
+        cursor.execute("DELETE FROM usuarios WHERE id = %s", (id_usuario,))
+
+
 if all(os.environ.get(name) for name in _REQUIRED_ENV_VARS):
     inicializar_banco()
