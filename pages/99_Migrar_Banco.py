@@ -1,5 +1,11 @@
 import streamlit as st
 
+if (
+    "perfil" not in st.session_state
+    or st.session_state["perfil"] != "ADMIN"
+):
+    st.stop()
+
 from migrar_sqlite_para_postgres import migrar
 
 
