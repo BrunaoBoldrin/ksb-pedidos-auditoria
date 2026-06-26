@@ -10,7 +10,12 @@ from database import (
     atualizar_regra_fiscal,
     excluir_regra_fiscal,
     buscar_regra_fiscal,
-    localizar_regra_fiscal    
+    localizar_regra_fiscal,
+    buscar_usuario_login,
+    listar_usuarios,
+    inserir_usuario,
+    excluir_usuario
+
 )
 
 import streamlit as st
@@ -28,6 +33,21 @@ st.set_page_config(
     page_icon="📄",
     layout="wide"
 )
+
+
+# ====================================
+# LOGIN
+# ====================================
+
+if "usuario_logado" not in st.session_state:
+    st.session_state.usuario_logado = None
+
+if "nome_usuario" not in st.session_state:
+    st.session_state.nome_usuario = None
+
+if "perfil_usuario" not in st.session_state:
+    st.session_state.perfil_usuario = None
+
 
 # ====================================
 # CSS
@@ -63,26 +83,131 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+# ====================================
+# LOGIN
+# ====================================
+
+if st.session_state.usuario_logado is None:
+
+    st.title("🔐 Login")
+
+    usuario = st.text_input(
+        "Usuário"
+    )
+
+    senha = st.text_input(
+        "Senha",
+        type="password"
+    )
+
+    if st.button("Entrar"):
+
+        resultado = buscar_usuario_login(
+            usuario,
+            senha
+        )
+
+        if resultado:
+
+            st.session_state.usuario_logado = resultado[2]
+
+            st.session_state.nome_usuario = resultado[1]
+
+            st.session_state.perfil_usuario = resultado[3]
+
+            st.rerun()
+
+        else:
+
+            st.error(
+                "Usuário ou senha inválidos"
+            )
+
+    st.stop()
+
+
 # ====================================
 # MENU
 # ====================================
 
-menu = st.sidebar.radio(
+with st.sidebar:
 
-    "Menu",
+    st.success(
+        f"👤 {st.session_state.nome_usuario}"
+    )
 
-    [
+    st.caption(
+        f"Perfil: {st.session_state.perfil_usuario}"
+    )
+
+    if st.button("🚪 Logout"):
+
+        st.session_state.usuario_logado = None
+
+        st.session_state.nome_usuario = None
+
+        st.session_state.perfil_usuario = None
+
+        st.rerun()
+
+perfil = st.session_state.perfil_usuario
+
+if perfil == "ADMIN":
+
+    opcoes_menu = [
 
         "📄 Análise de Pedidos KSB",
 
         "📦 Itens Cadastrados",
 
-         "🏛 Regras Fiscais",
+        "🏛 Regras Fiscais",
+
+        "📋 Histórico de Auditorias",
+
+        "👤 Usuários",
+
+        "🛠️ Ferramentas Administrativas"
+
+    ]
+
+elif perfil == "VENDEDORA":
+
+    opcoes_menu = [
+
+        "📄 Análise de Pedidos KSB",
+
+        "📦 Itens Cadastrados",
 
         "📋 Histórico de Auditorias"
 
     ]
+
+elif perfil == "PROCESSISTA":
+
+    opcoes_menu = [
+
+        "📦 Itens Cadastrados"
+
+    ]
+
+else:
+
+    opcoes_menu = [
+
+        "📄 Análise de Pedidos KSB"
+
+    ]
+
+menu = st.sidebar.radio(
+
+    "Menu",
+
+    opcoes_menu
+
 )
+
+pode_editar_materiais = perfil in ["ADMIN", "PROCESSISTA"]
 
 # ====================================
 # ANALISE DE PEDIDOS
@@ -469,6 +594,7 @@ elif menu == "📦 Itens Cadastrados":
     
 
 
+
     # ====================================
     # BOTOES
     # ====================================
@@ -490,7 +616,8 @@ elif menu == "📦 Itens Cadastrados":
 
      if st.button(
         "📥 Importar Excel",
-        key="btn_importar"
+        key="btn_importar",
+        disabled=not pode_editar_materiais
     ):
 
         st.session_state.mostrar_importacao = True
@@ -498,7 +625,8 @@ elif menu == "📦 Itens Cadastrados":
     with col_novo:
 
         if st.button(
-            "➕ Novo Material"
+            "➕ Novo Material",
+            disabled=not pode_editar_materiais
         ):
 
             st.session_state.modo_material = "novo"
@@ -513,7 +641,8 @@ elif menu == "📦 Itens Cadastrados":
             
             if st.button(
                 "✏️ Editar Material",
-                key="btn_editar"
+                key="btn_editar",
+                disabled=not pode_editar_materiais
             ):
 
                 if materiais_selecionados.empty:
@@ -545,7 +674,8 @@ elif menu == "📦 Itens Cadastrados":
 
         if st.button(
             "🗑 Excluir Selecionados",
-            key="btn_excluir"
+            key="btn_excluir",
+            disabled=not pode_editar_materiais
         ):
 
             if materiais_selecionados.empty:
@@ -731,6 +861,7 @@ elif menu == "📦 Itens Cadastrados":
 
                             st.rerun()
                         
+
 
 
             except Exception as erro:
@@ -1313,6 +1444,228 @@ elif menu == "🏛 Regras Fiscais":
 
     
 
+
+
+# ====================================
+# USUARIOS
+# ====================================
+
+elif menu == "👤 Usuários":
+
+    st.title("👤 Usuários")
+
+    if perfil != "ADMIN":
+
+        st.error("Acesso negado.")
+
+        st.stop()
+
+    if "modo_usuario" not in st.session_state:
+
+        st.session_state.modo_usuario = None
+
+    usuarios = listar_usuarios()
+
+    df_usuarios = pd.DataFrame(
+        usuarios,
+        columns=[
+            "ID",
+            "Nome",
+            "Usuário",
+            "Perfil",
+            "Ativo"
+        ]
+    )
+
+    if df_usuarios.empty:
+
+        st.info("Nenhum usuário cadastrado.")
+
+        usuarios_selecionados = pd.DataFrame()
+
+    else:
+
+        df_usuarios.insert(
+            0,
+            "Selecionar",
+            False
+        )
+
+        tabela_usuarios = st.data_editor(
+            df_usuarios,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        usuarios_selecionados = tabela_usuarios[
+            tabela_usuarios["Selecionar"] == True
+        ]
+
+    st.divider()
+
+    col_novo_usuario, col_excluir_usuario = st.columns(2)
+
+    with col_novo_usuario:
+
+        if st.button("➕ Novo Usuário"):
+
+            st.session_state.modo_usuario = "novo"
+
+            st.rerun()
+
+    with col_excluir_usuario:
+
+        if st.button("🗑️ Excluir Usuário"):
+
+            if usuarios_selecionados.empty:
+
+                st.warning("Selecione um usuário.")
+
+            elif len(usuarios_selecionados) > 1:
+
+                st.warning("Selecione apenas um usuário.")
+
+            else:
+
+                usuario_id = int(
+                    usuarios_selecionados.iloc[0]["ID"]
+                )
+
+                excluir_usuario(usuario_id)
+
+                st.success("Usuário excluído com sucesso.")
+
+                st.rerun()
+
+    if st.session_state.modo_usuario == "novo":
+
+        st.divider()
+
+        st.subheader("➕ Novo Usuário")
+
+        with st.form("form_novo_usuario"):
+
+            nome = st.text_input("Nome")
+
+            usuario = st.text_input("Usuário")
+
+            senha = st.text_input(
+                "Senha",
+                type="password"
+            )
+
+            perfil_novo = st.selectbox(
+                "Perfil",
+                [
+                    "ADMIN",
+                    "VENDEDORA",
+                    "PROCESSISTA"
+                ]
+            )
+
+            col_salvar_usuario, col_cancelar_usuario = st.columns(2)
+
+            with col_salvar_usuario:
+
+                salvar_usuario = st.form_submit_button("💾 Salvar")
+
+            with col_cancelar_usuario:
+
+                cancelar_usuario = st.form_submit_button("❌ Cancelar")
+
+            if salvar_usuario:
+
+                if not nome or not usuario or not senha:
+
+                    st.warning("Preencha nome, usuário e senha.")
+
+                else:
+
+                    inserir_usuario(
+                        nome,
+                        usuario,
+                        senha,
+                        perfil_novo
+                    )
+
+                    st.success("Usuário cadastrado com sucesso.")
+
+                    st.session_state.modo_usuario = None
+
+                    st.rerun()
+
+            if cancelar_usuario:
+
+                st.session_state.modo_usuario = None
+
+                st.rerun()
+
+
+# ====================================
+# FERRAMENTAS ADMINISTRATIVAS
+# ====================================
+
+elif menu == "🛠️ Ferramentas Administrativas":
+
+    st.title("🛠️ Ferramentas Administrativas")
+
+    if perfil != "ADMIN":
+
+        st.error("Acesso negado.")
+
+        st.stop()
+
+    st.warning(
+        "Área restrita. Use apenas para manutenção do sistema."
+    )
+
+    with st.expander("🗄️ Migração SQLite → PostgreSQL/Neon", expanded=False):
+
+        st.write("Origem: database.db")
+        st.write("Destino: banco PostgreSQL configurado nas variáveis de ambiente")
+
+        limpar_destino = st.checkbox(
+            "Limpar dados atuais do PostgreSQL antes de migrar",
+            value=False
+        )
+
+        confirmacao = st.text_input(
+            "Digite MIGRAR para liberar o botão",
+            value=""
+        )
+
+        if confirmacao == "MIGRAR":
+
+            if st.button("🚀 Executar Migração"):
+
+                try:
+
+                    from migrar_sqlite_para_postgres import migrar
+
+                    with st.spinner("Migrando dados..."):
+
+                        totais = migrar(
+                            sqlite_path="database.db",
+                            limpar=limpar_destino
+                        )
+
+                    st.success("Migração concluída com sucesso.")
+
+                    for tabela, total in totais.items():
+
+                        st.write(
+                            f"{tabela}: {total} registro(s) migrado(s)"
+                        )
+
+                except Exception as erro:
+
+                    st.error("Erro ao executar migração.")
+
+                    st.exception(erro)
+
+        else:
+
+            st.info("Digite MIGRAR para habilitar o botão.")
 
 
 # ====================================
