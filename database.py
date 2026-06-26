@@ -71,10 +71,17 @@ def inicializar_banco():
                 codigo_interno_varzea TEXT,
                 preco_revisado DOUBLE PRECISION,
                 data_ultima_revisao TEXT,
+                usuario_ultima_revisao_preco TEXT,
                 ativo INTEGER DEFAULT 1,
                 data_cadastro TEXT,
                 data_atualizacao TEXT
             )
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE materiais
+            ADD COLUMN IF NOT EXISTS usuario_ultima_revisao_preco TEXT
             """
         )
         cursor.execute(
@@ -184,15 +191,17 @@ def inserir_material(
     codigo_interno_varzea,
     preco_revisado,
     data_ultima_revisao,
+    usuario_ultima_revisao_preco=None,
 ):
     with _cursor(commit=True) as cursor:
         cursor.execute(
             """
             INSERT INTO materiais (
                 codigo_material, descricao, material, norma, ncm, unidade_medida,
-                codigo_interno_jundiai, codigo_interno_varzea, preco_revisado, data_ultima_revisao
+                codigo_interno_jundiai, codigo_interno_varzea, preco_revisado,
+                data_ultima_revisao, usuario_ultima_revisao_preco
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (codigo_material) DO UPDATE SET
                 descricao = EXCLUDED.descricao,
                 material = EXCLUDED.material,
@@ -202,7 +211,8 @@ def inserir_material(
                 codigo_interno_jundiai = EXCLUDED.codigo_interno_jundiai,
                 codigo_interno_varzea = EXCLUDED.codigo_interno_varzea,
                 preco_revisado = EXCLUDED.preco_revisado,
-                data_ultima_revisao = EXCLUDED.data_ultima_revisao
+                data_ultima_revisao = EXCLUDED.data_ultima_revisao,
+                usuario_ultima_revisao_preco = EXCLUDED.usuario_ultima_revisao_preco
             """,
             (
                 codigo_material,
@@ -215,6 +225,7 @@ def inserir_material(
                 codigo_interno_varzea,
                 preco_revisado,
                 data_ultima_revisao,
+                usuario_ultima_revisao_preco,
             ),
         )
 
@@ -236,6 +247,7 @@ def atualizar_material(
     codigo_interno_varzea,
     preco_revisado,
     data_ultima_revisao,
+    usuario_ultima_revisao_preco=None,
 ):
     with _cursor(commit=True) as cursor:
         cursor.execute(
@@ -249,7 +261,8 @@ def atualizar_material(
                 codigo_interno_jundiai = %s,
                 codigo_interno_varzea = %s,
                 preco_revisado = %s,
-                data_ultima_revisao = %s
+                data_ultima_revisao = %s,
+                usuario_ultima_revisao_preco = COALESCE(%s, usuario_ultima_revisao_preco)
             WHERE codigo_material = %s
             """,
             (
@@ -262,6 +275,7 @@ def atualizar_material(
                 codigo_interno_varzea,
                 preco_revisado,
                 data_ultima_revisao,
+                usuario_ultima_revisao_preco,
                 codigo_material,
             ),
         )
@@ -277,7 +291,8 @@ def listar_materiais_completo():
         cursor.execute(
             """
             SELECT codigo_material, descricao, material, norma, ncm, unidade_medida,
-                   codigo_interno_jundiai, codigo_interno_varzea, preco_revisado, data_ultima_revisao
+                   codigo_interno_jundiai, codigo_interno_varzea, preco_revisado,
+                   data_ultima_revisao, usuario_ultima_revisao_preco
             FROM materiais
             ORDER BY codigo_material
             """
