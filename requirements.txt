@@ -3,4 +3,4 @@ pdfplumber
 pandas
 openpyxl
 psycopg2-binary
-
+reportlab
