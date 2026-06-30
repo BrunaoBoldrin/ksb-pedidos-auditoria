@@ -1,8 +1,14 @@
 from datetime import date
+from html import escape
+from io import BytesIO
 import re
 
 import pandas as pd
 import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from database import (
     atualizar_material,
@@ -32,6 +38,102 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
+
+
+
+def formatar_moeda(valor):
+    try:
+        return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "-"
+
+
+def valor_texto(linha, coluna, padrao="-"):
+    valor = linha.get(coluna, padrao)
+    if pd.isna(valor) or str(valor).strip() in ["", "nan", "None"]:
+        return padrao
+    return str(valor)
+
+
+def texto_pdf(valor):
+    return escape(str(valor_texto({"v": valor}, "v")))
+
+
+def gerar_pdf_auditoria(df_analise, codigo_pedido):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=28, leftMargin=28, topMargin=28, bottomMargin=28)
+    styles = getSampleStyleSheet()
+    elementos = []
+    pedido = codigo_pedido or "sem código"
+    total = len(df_analise)
+    ok = len(df_analise[df_analise["Status"] == "OK"]) if "Status" in df_analise.columns else 0
+    divergentes = len(df_analise[df_analise["Status"] == "DIVERGENTE"]) if "Status" in df_analise.columns else 0
+    primeira = df_analise.iloc[0] if total else {}
+
+    elementos.append(Paragraph(f"Avaliação do Pedido {texto_pdf(pedido)}", styles["Title"]))
+    elementos.append(Paragraph(f"Data de emissão: {texto_pdf(valor_texto(primeira, 'Data Emissão'))} | Unidade: {texto_pdf(valor_texto(primeira, 'Unidade Pedido'))} | Comprador: {texto_pdf(valor_texto(primeira, 'Comprador'))}", styles["Normal"]))
+    elementos.append(Spacer(1, 10))
+    resumo = Table([["Itens analisados", "OK", "Divergentes"], [total, ok, divergentes]], hAlign="LEFT")
+    resumo.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey), ("GRID", (0, 0), (-1, -1), 0.5, colors.grey)]))
+    elementos.extend([resumo, Spacer(1, 12)])
+
+    for _, linha in df_analise.iterrows():
+        status = valor_texto(linha, "Status")
+        titulo = f"Item {valor_texto(linha, 'Item')} - {valor_texto(linha, 'Código Material')} - {status}"
+        elementos.append(Paragraph(texto_pdf(titulo), styles["Heading3"]))
+        dados = [
+            ["Descrição", valor_texto(linha, "Descrição")],
+            ["Qtd/Unidade", f"{valor_texto(linha, 'Quantidade')} {valor_texto(linha, 'Unidade')}"] ,
+            ["NCM Pedido", valor_texto(linha, "NCM Pedido KSB")],
+            ["NCM Cadastro", valor_texto(linha, "NCM Cadastro")],
+            ["Impostos", f"ICMS {valor_texto(linha, 'ICMS Regra')}% | PIS/COFINS 9,25% | IPI {valor_texto(linha, 'IPI Regra')}%"],
+            ["Valores", f"Base {formatar_moeda(linha.get('Valor Base'))} | ICMS {formatar_moeda(linha.get('Valor ICMS'))} | PIS/COFINS {formatar_moeda(linha.get('Valor PIS/COFINS'))} | IPI {formatar_moeda(linha.get('Valor IPI'))}"],
+            ["Pedido x Calculado", f"Pedido {formatar_moeda(linha.get('Valor Pedido'))} | Calculado {formatar_moeda(linha.get('Valor Calculado'))} | Diferença {formatar_moeda(linha.get('Diferença'))}"],
+            ["Diagnóstico", valor_texto(linha, "Diagnóstico")],
+        ]
+        dados = [[texto_pdf(celula) for celula in linha_dados] for linha_dados in dados]
+        tabela = Table(dados, colWidths=[105, 395])
+        tabela.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, colors.grey), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke)]))
+        elementos.extend([tabela, Spacer(1, 10)])
+
+    doc.build(elementos)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def exibir_cards_auditoria(df_analise_final):
+    total = len(df_analise_final)
+    ok = len(df_analise_final[df_analise_final["Status"] == "OK"])
+    divergentes = len(df_analise_final[df_analise_final["Status"] == "DIVERGENTE"])
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Itens Processados", total)
+    col2.metric("Itens OK", ok)
+    col3.metric("Itens Divergentes", divergentes)
+    st.divider()
+    st.subheader("📋 Auditoria detalhada por item")
+    for _, linha in df_analise_final.iterrows():
+        status = valor_texto(linha, "Status")
+        cor = "#0f8a3b" if status == "OK" else "#b42318"
+        with st.container(border=True):
+            st.markdown(f"### <span style='color:{cor}'>{'✅' if status == 'OK' else '❌'} {status}</span> — Item {valor_texto(linha, 'Item')} | Material {valor_texto(linha, 'Código Material')}", unsafe_allow_html=True)
+            c1, c2, c3 = st.columns(3)
+            c1.write(f"**Descrição:** {valor_texto(linha, 'Descrição')}")
+            c1.write(f"**Quantidade:** {valor_texto(linha, 'Quantidade')} {valor_texto(linha, 'Unidade')}")
+            c2.write(f"**NCM Pedido:** {valor_texto(linha, 'NCM Pedido KSB')}")
+            c2.write(f"**NCM Cadastro:** {valor_texto(linha, 'NCM Cadastro')}")
+            c3.write(f"**ICMS:** {valor_texto(linha, 'ICMS Regra')}%")
+            c3.write("**PIS/COFINS:** 9,25%")
+            c3.write(f"**IPI:** {valor_texto(linha, 'IPI Regra')}%")
+            v1, v2, v3, v4 = st.columns(4)
+            v1.metric("Valor Base", formatar_moeda(linha.get("Valor Base")))
+            v2.metric("Valor IPI", formatar_moeda(linha.get("Valor IPI")))
+            v3.metric("Valor Pedido", formatar_moeda(linha.get("Valor Pedido")))
+            v4.metric("Diferença", formatar_moeda(linha.get("Diferença")))
+            if status != "OK":
+                st.error(f"**Diagnóstico:** {valor_texto(linha, 'Diagnóstico')}")
+                if valor_texto(linha, "Descrição NCM Pedido", ""):
+                    st.caption(f"NCM do pedido: {valor_texto(linha, 'NCM Pedido KSB')} - {valor_texto(linha, 'Descrição NCM Pedido')}")
+                    st.caption(f"NCM correto: {valor_texto(linha, 'NCM Cadastro')} - {valor_texto(linha, 'Descrição NCM Cadastro')}")
 
 
 def limpar_texto(valor):
@@ -189,15 +291,15 @@ if menu == "📄 Análise de Pedidos KSB":
 
             df_final = pd.concat(todos_dados, ignore_index=True)
             df_analise_final = pd.concat(todas_analises, ignore_index=True)
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Itens Processados", len(df_analise_final))
-            col2.metric("Itens OK", len(df_analise_final[df_analise_final["Status"] == "OK"]))
-            col3.metric("Itens Divergentes", len(df_analise_final[df_analise_final["Status"] == "DIVERGENTE"]))
-            st.divider()
-            st.subheader("📋 Auditoria")
-            if "Divergencias" in df_analise_final.columns:
-                df_analise_final["Divergencias"] = df_analise_final["Divergencias"].astype(str).str.replace("|", "\n")
-            st.dataframe(df_analise_final, use_container_width=True, height=400)
+            exibir_cards_auditoria(df_analise_final)
+            codigo_pedido = str(df_analise_final.iloc[0]["Pedido"]) if not df_analise_final.empty else ""
+            pdf_bytes = gerar_pdf_auditoria(df_analise_final, codigo_pedido)
+            st.download_button(
+                "📄 Baixar Avaliação em PDF",
+                pdf_bytes,
+                f"Avaliação do Pedido {codigo_pedido}.pdf",
+                "application/pdf",
+            )
             st.divider()
             st.subheader("📦 Dados Extraídos")
             st.dataframe(df_final, use_container_width=True)
