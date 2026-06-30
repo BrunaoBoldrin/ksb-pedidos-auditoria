@@ -53,7 +53,7 @@ def calcular_divisor_base(icms):
     if abs(icms_float - 18.0) < 0.01:
         return 0.7442
 
-divisor = 1 - (icms_float / 100) - PIS_COFINS_PERCENTUAL
+    divisor = 1 - (icms_float / 100) - PIS_COFINS_PERCENTUAL
     if divisor <= 0:
         return 0.7442
     return divisor
