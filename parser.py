@@ -16,7 +16,6 @@ TOLERANCIA_IMPOSTO = 1.00
 
 def moeda_para_float(valor):
     valor = str(valor)
-
     valor = valor.replace(".", "")
     valor = valor.replace(",", ".")
     valor = valor.replace("/1", "")
@@ -24,8 +23,7 @@ def moeda_para_float(valor):
 
     try:
         return float(valor)
-
-    except:
+    except Exception:
         return 0.0
 
 
@@ -38,7 +36,6 @@ def percentual_para_decimal(valor):
         return float(valor or 0) / 100
     except Exception:
         return 0.0
-
 
 
 def calcular_divisor_base(icms):
@@ -54,18 +51,17 @@ def calcular_divisor_base(icms):
         return 0.7442
 
     divisor = 1 - (icms_float / 100) - PIS_COFINS_PERCENTUAL
+
     if divisor <= 0:
         return 0.7442
+
     return divisor
-    
 
 
 def texto_regra(regra):
     if not regra:
         return "Regra fiscal não cadastrada"
     return str(regra.get("observacao") or "Sem observação cadastrada").strip()
-
-
 
 
 def diagnosticar_imposto_na_diferenca(diferenca, impostos):
@@ -75,12 +71,8 @@ def diagnosticar_imposto_na_diferenca(diferenca, impostos):
                 f"A diferença encontrada corresponde aproximadamente ao valor do {nome}, "
                 "indicando que este imposto pode não estar discriminado no pedido KSB."
             )
-    return "Valor do pedido diverge do valor calculado com base líquida, divisor fiscal e IPI da regra fiscal."
 
-def texto_regra(regra):
-    if not regra:
-        return "Regra fiscal não cadastrada"
-    return str(regra.get("observacao") or "Sem observação cadastrada").strip()
+    return "Valor do pedido diverge do valor calculado com base líquida, divisor fiscal e IPI da regra fiscal."
 
 
 # ====================================
