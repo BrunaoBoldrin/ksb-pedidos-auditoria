@@ -1,20 +1,28 @@
-"""Camada de acesso a dados PostgreSQL/Neon.
-
-Mantém as funções públicas usadas pelo app.py e parser.py.
-"""
+"""Camada de acesso a dados PostgreSQL/Neon."""
 
 import os
 from contextlib import contextmanager
 
 import psycopg2
 
-
 _REQUIRED_ENV_VARS = ("DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD")
+
+
+def _limpar_texto(valor):
+    if valor is None:
+        return ""
+    texto = str(valor).strip()
+    if texto.lower() in ("nan", "none", "nat"):
+        return ""
+    return texto
+
+
+def _limpar_codigo(codigo):
+    return _limpar_texto(codigo)
 
 
 def _get_db_config():
     missing = [name for name in _REQUIRED_ENV_VARS if not os.environ.get(name)]
-
     if missing:
         raise RuntimeError(
             "Variáveis de ambiente do PostgreSQL ausentes: "
@@ -60,8 +68,7 @@ def inicializar_banco():
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS materiais (
-                id SERIAL PRIMARY KEY,
-                codigo_material TEXT UNIQUE NOT NULL,
+                codigo_material TEXT PRIMARY KEY,
                 descricao TEXT,
                 material TEXT,
                 norma TEXT,
@@ -78,12 +85,80 @@ def inicializar_banco():
             )
             """
         )
+        cursor.execute("ALTER TABLE materiais ADD COLUMN IF NOT EXISTS usuario_ultima_revisao_preco TEXT")
+        cursor.execute("DELETE FROM materiais WHERE codigo_material IS NULL OR BTRIM(codigo_material) = ''")
+
+        # IMPORTANTE:
+        # Não pode fazer UPDATE codigo_material = BTRIM(codigo_material) antes de consolidar.
+        # Se existirem '01752467' e '01752467 ', o PostgreSQL dispara UniqueViolation.
+        # Por isso consolidamos usando BTRIM() + ctid, apagamos duplicados e só depois normalizamos o código.
         cursor.execute(
             """
-            ALTER TABLE materiais
-            ADD COLUMN IF NOT EXISTS usuario_ultima_revisao_preco TEXT
+            WITH ranked AS (
+                SELECT
+                    ctid,
+                    BTRIM(codigo_material) AS codigo,
+                    ROW_NUMBER() OVER (PARTITION BY BTRIM(codigo_material) ORDER BY ctid) AS rn
+                FROM materiais
+                WHERE codigo_material IS NOT NULL
+            ), grupos AS (
+                SELECT
+                    r.codigo,
+                    (ARRAY_AGG(r.ctid ORDER BY r.rn))[1] AS keep_ctid,
+                    (ARRAY_AGG(NULLIF(m.descricao, '') ORDER BY r.rn DESC) FILTER (WHERE NULLIF(m.descricao, '') IS NOT NULL))[1] AS descricao_v,
+                    (ARRAY_AGG(NULLIF(m.material, '') ORDER BY r.rn DESC) FILTER (WHERE NULLIF(m.material, '') IS NOT NULL))[1] AS material_v,
+                    (ARRAY_AGG(NULLIF(m.norma, '') ORDER BY r.rn DESC) FILTER (WHERE NULLIF(m.norma, '') IS NOT NULL))[1] AS norma_v,
+                    (ARRAY_AGG(NULLIF(m.ncm, '') ORDER BY r.rn DESC) FILTER (WHERE NULLIF(m.ncm, '') IS NOT NULL))[1] AS ncm_v,
+                    (ARRAY_AGG(NULLIF(m.unidade_medida, '') ORDER BY r.rn DESC) FILTER (WHERE NULLIF(m.unidade_medida, '') IS NOT NULL))[1] AS unidade_v,
+                    (ARRAY_AGG(NULLIF(m.codigo_interno_jundiai, '') ORDER BY r.rn DESC) FILTER (WHERE NULLIF(m.codigo_interno_jundiai, '') IS NOT NULL))[1] AS jundiai_v,
+                    (ARRAY_AGG(NULLIF(m.codigo_interno_varzea, '') ORDER BY r.rn DESC) FILTER (WHERE NULLIF(m.codigo_interno_varzea, '') IS NOT NULL))[1] AS varzea_v,
+                    (ARRAY_AGG(m.preco_revisado ORDER BY r.rn DESC) FILTER (WHERE m.preco_revisado IS NOT NULL))[1] AS preco_v,
+                    (ARRAY_AGG(NULLIF(m.data_ultima_revisao, '') ORDER BY r.rn DESC) FILTER (WHERE NULLIF(m.data_ultima_revisao, '') IS NOT NULL))[1] AS data_v,
+                    (ARRAY_AGG(NULLIF(m.usuario_ultima_revisao_preco, '') ORDER BY r.rn DESC) FILTER (WHERE NULLIF(m.usuario_ultima_revisao_preco, '') IS NOT NULL))[1] AS usuario_v
+                FROM ranked r
+                JOIN materiais m ON m.ctid = r.ctid
+                GROUP BY r.codigo
+                HAVING COUNT(*) > 1
+            )
+            UPDATE materiais m
+            SET descricao = COALESCE(g.descricao_v, m.descricao),
+                material = COALESCE(g.material_v, m.material),
+                norma = COALESCE(g.norma_v, m.norma),
+                ncm = COALESCE(g.ncm_v, m.ncm),
+                unidade_medida = COALESCE(g.unidade_v, m.unidade_medida),
+                codigo_interno_jundiai = COALESCE(g.jundiai_v, m.codigo_interno_jundiai),
+                codigo_interno_varzea = COALESCE(g.varzea_v, m.codigo_interno_varzea),
+                preco_revisado = COALESCE(g.preco_v, m.preco_revisado),
+                data_ultima_revisao = COALESCE(g.data_v, m.data_ultima_revisao),
+                usuario_ultima_revisao_preco = COALESCE(g.usuario_v, m.usuario_ultima_revisao_preco)
+            FROM grupos g
+            WHERE m.ctid = g.keep_ctid
             """
         )
+        cursor.execute(
+            """
+            WITH ranked AS (
+                SELECT
+                    ctid,
+                    BTRIM(codigo_material) AS codigo,
+                    ROW_NUMBER() OVER (PARTITION BY BTRIM(codigo_material) ORDER BY ctid) AS rn
+                FROM materiais
+                WHERE codigo_material IS NOT NULL
+            )
+            DELETE FROM materiais m
+            USING ranked r
+            WHERE m.ctid = r.ctid
+              AND r.rn > 1
+            """
+        )
+        cursor.execute("UPDATE materiais SET codigo_material = BTRIM(codigo_material) WHERE codigo_material IS NOT NULL")
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_materiais_codigo_material_trim_unico
+            ON materiais (BTRIM(codigo_material))
+            """
+        )
+
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS pedidos (
@@ -139,8 +214,8 @@ def inicializar_banco():
             """
             CREATE TABLE IF NOT EXISTS regras_fiscais (
                 id SERIAL PRIMARY KEY,
-                palavra_chave TEXT NOT NULL,
-                material TEXT NOT NULL,
+                palavra_chave TEXT,
+                material TEXT,
                 ncm TEXT NOT NULL,
                 aliquota_icms DOUBLE PRECISION,
                 aliquota_ipi DOUBLE PRECISION,
@@ -149,6 +224,8 @@ def inicializar_banco():
             )
             """
         )
+        cursor.execute("ALTER TABLE regras_fiscais ALTER COLUMN palavra_chave DROP NOT NULL")
+        cursor.execute("ALTER TABLE regras_fiscais ALTER COLUMN material DROP NOT NULL")
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS usuarios (
@@ -180,60 +257,59 @@ def listar_materiais():
         return cursor.fetchall()
 
 
-def inserir_material(
-    codigo_material,
-    descricao,
-    material,
-    norma,
-    ncm,
-    unidade_medida,
-    codigo_interno_jundiai,
-    codigo_interno_varzea,
-    preco_revisado,
-    data_ultima_revisao,
-    usuario_ultima_revisao_preco=None,
-):
-    with _cursor(commit=True) as cursor:
+def listar_materiais_completo():
+    with _cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO materiais (
-                codigo_material, descricao, material, norma, ncm, unidade_medida,
-                codigo_interno_jundiai, codigo_interno_varzea, preco_revisado,
-                data_ultima_revisao, usuario_ultima_revisao_preco
-            )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            ON CONFLICT (codigo_material) DO UPDATE SET
-                descricao = EXCLUDED.descricao,
-                material = EXCLUDED.material,
-                norma = EXCLUDED.norma,
-                ncm = EXCLUDED.ncm,
-                unidade_medida = EXCLUDED.unidade_medida,
-                codigo_interno_jundiai = EXCLUDED.codigo_interno_jundiai,
-                codigo_interno_varzea = EXCLUDED.codigo_interno_varzea,
-                preco_revisado = EXCLUDED.preco_revisado,
-                data_ultima_revisao = EXCLUDED.data_ultima_revisao,
-                usuario_ultima_revisao_preco = EXCLUDED.usuario_ultima_revisao_preco
-            """,
-            (
-                codigo_material,
-                descricao,
-                material,
-                norma,
-                ncm,
-                unidade_medida,
-                codigo_interno_jundiai,
-                codigo_interno_varzea,
-                preco_revisado,
-                data_ultima_revisao,
-                usuario_ultima_revisao_preco,
-            ),
+            SELECT codigo_material, descricao, material, norma, ncm, unidade_medida,
+                   codigo_interno_jundiai, codigo_interno_varzea, preco_revisado,
+                   data_ultima_revisao, usuario_ultima_revisao_preco
+            FROM materiais
+            ORDER BY codigo_material
+            """
         )
+        return cursor.fetchall()
 
 
 def buscar_material(codigo):
+    codigo = _limpar_codigo(codigo)
     with _cursor() as cursor:
-        cursor.execute("SELECT * FROM materiais WHERE codigo_material = %s", (codigo,))
+        cursor.execute("SELECT * FROM materiais WHERE BTRIM(codigo_material) = %s LIMIT 1", (codigo,))
         return cursor.fetchone()
+
+
+def buscar_material_por_codigo(codigo_material):
+    codigo_material = _limpar_codigo(codigo_material)
+    with _cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT codigo_material, descricao, material, norma, ncm, unidade_medida,
+                   codigo_interno_jundiai, codigo_interno_varzea, preco_revisado,
+                   data_ultima_revisao, usuario_ultima_revisao_preco
+            FROM materiais
+            WHERE BTRIM(codigo_material) = %s
+            LIMIT 1
+            """,
+            (codigo_material,),
+        )
+        linha = cursor.fetchone()
+
+    if not linha:
+        return None
+
+    return {
+        "codigo_material": linha[0],
+        "descricao": linha[1],
+        "material": linha[2],
+        "norma": linha[3],
+        "ncm": linha[4],
+        "unidade_medida": linha[5],
+        "codigo_interno_jundiai": linha[6],
+        "codigo_interno_varzea": linha[7],
+        "preco_unitario_liquido": linha[8],
+        "data_ultima_revisao": linha[9],
+        "usuario_ultima_revisao_preco": linha[10],
+    }
 
 
 def atualizar_material(
@@ -249,21 +325,32 @@ def atualizar_material(
     data_ultima_revisao,
     usuario_ultima_revisao_preco=None,
 ):
+    codigo_material = _limpar_codigo(codigo_material)
+    descricao = _limpar_texto(descricao)
+    material = _limpar_texto(material)
+    norma = _limpar_texto(norma)
+    ncm = _limpar_texto(ncm)
+    unidade_medida = _limpar_texto(unidade_medida)
+    codigo_interno_jundiai = _limpar_texto(codigo_interno_jundiai)
+    codigo_interno_varzea = _limpar_texto(codigo_interno_varzea)
+    data_ultima_revisao = _limpar_texto(data_ultima_revisao)
+    usuario_ultima_revisao_preco = _limpar_texto(usuario_ultima_revisao_preco)
+
     with _cursor(commit=True) as cursor:
         cursor.execute(
             """
             UPDATE materiais
-            SET descricao = %s,
-                material = %s,
-                norma = %s,
-                ncm = %s,
-                unidade_medida = %s,
-                codigo_interno_jundiai = %s,
-                codigo_interno_varzea = %s,
-                preco_revisado = %s,
-                data_ultima_revisao = %s,
-                usuario_ultima_revisao_preco = COALESCE(%s, usuario_ultima_revisao_preco)
-            WHERE codigo_material = %s
+            SET descricao = COALESCE(NULLIF(%s, ''), descricao),
+                material = COALESCE(NULLIF(%s, ''), material),
+                norma = COALESCE(NULLIF(%s, ''), norma),
+                ncm = COALESCE(NULLIF(%s, ''), ncm),
+                unidade_medida = COALESCE(NULLIF(%s, ''), unidade_medida),
+                codigo_interno_jundiai = COALESCE(NULLIF(%s, ''), codigo_interno_jundiai),
+                codigo_interno_varzea = COALESCE(NULLIF(%s, ''), codigo_interno_varzea),
+                preco_revisado = COALESCE(%s, preco_revisado),
+                data_ultima_revisao = COALESCE(NULLIF(%s, ''), data_ultima_revisao),
+                usuario_ultima_revisao_preco = COALESCE(NULLIF(%s, ''), usuario_ultima_revisao_preco)
+            WHERE BTRIM(codigo_material) = %s
             """,
             (
                 descricao,
@@ -279,25 +366,64 @@ def atualizar_material(
                 codigo_material,
             ),
         )
+        if cursor.rowcount == 0:
+            cursor.execute(
+                """
+                INSERT INTO materiais (
+                    codigo_material, descricao, material, norma, ncm, unidade_medida,
+                    codigo_interno_jundiai, codigo_interno_varzea, preco_revisado,
+                    data_ultima_revisao, usuario_ultima_revisao_preco
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    codigo_material,
+                    descricao,
+                    material,
+                    norma,
+                    ncm,
+                    unidade_medida,
+                    codigo_interno_jundiai,
+                    codigo_interno_varzea,
+                    preco_revisado,
+                    data_ultima_revisao,
+                    usuario_ultima_revisao_preco,
+                ),
+            )
+
+
+def inserir_material(
+    codigo_material,
+    descricao,
+    material,
+    norma,
+    ncm,
+    unidade_medida,
+    codigo_interno_jundiai,
+    codigo_interno_varzea,
+    preco_revisado,
+    data_ultima_revisao,
+    usuario_ultima_revisao_preco=None,
+):
+    atualizar_material(
+        codigo_material,
+        descricao,
+        material,
+        norma,
+        ncm,
+        unidade_medida,
+        codigo_interno_jundiai,
+        codigo_interno_varzea,
+        preco_revisado,
+        data_ultima_revisao,
+        usuario_ultima_revisao_preco,
+    )
 
 
 def excluir_material(codigo_material):
+    codigo_material = _limpar_codigo(codigo_material)
     with _cursor(commit=True) as cursor:
-        cursor.execute("DELETE FROM materiais WHERE codigo_material = %s", (codigo_material,))
-
-
-def listar_materiais_completo():
-    with _cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT codigo_material, descricao, material, norma, ncm, unidade_medida,
-                   codigo_interno_jundiai, codigo_interno_varzea, preco_revisado,
-                   data_ultima_revisao, usuario_ultima_revisao_preco
-            FROM materiais
-            ORDER BY codigo_material
-            """
-        )
-        return cursor.fetchall()
+        cursor.execute("DELETE FROM materiais WHERE BTRIM(codigo_material) = %s", (codigo_material,))
 
 
 def criar_tabela_regras_fiscais():
@@ -308,65 +434,51 @@ def listar_regras_fiscais():
     with _cursor() as cursor:
         cursor.execute(
             """
-            SELECT id, palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo
+            SELECT id, ncm, aliquota_icms, aliquota_ipi, observacao, ativo
             FROM regras_fiscais
-            ORDER BY palavra_chave
+            ORDER BY ncm
             """
         )
         return cursor.fetchall()
 
 
-def inserir_regra_fiscal(
-    palavra_chave,
-    material,
-    ncm,
-    aliquota_icms,
-    aliquota_ipi,
-    observacao,
-    ativo=1,
-):
+def inserir_regra_fiscal(ncm, aliquota_icms, aliquota_ipi, observacao, ativo=1):
     with _cursor(commit=True) as cursor:
         cursor.execute(
             """
-            INSERT INTO regras_fiscais (
-                palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo
-            )
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO regras_fiscais (ncm, aliquota_icms, aliquota_ipi, observacao, ativo)
+            VALUES (%s,%s,%s,%s,%s)
             """,
-            (palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo),
+            (ncm, aliquota_icms, aliquota_ipi, observacao, ativo),
         )
 
 
 def buscar_regra_fiscal(id_regra):
     with _cursor() as cursor:
-        cursor.execute("SELECT * FROM regras_fiscais WHERE id = %s", (id_regra,))
+        cursor.execute(
+            """
+            SELECT id, ncm, aliquota_icms, aliquota_ipi, observacao, ativo
+            FROM regras_fiscais
+            WHERE id = %s
+            """,
+            (id_regra,),
+        )
         return cursor.fetchone()
 
 
-def atualizar_regra_fiscal(
-    id_regra,
-    palavra_chave,
-    material,
-    ncm,
-    aliquota_icms,
-    aliquota_ipi,
-    observacao,
-    ativo,
-):
+def atualizar_regra_fiscal(id_regra, ncm, aliquota_icms, aliquota_ipi, observacao, ativo):
     with _cursor(commit=True) as cursor:
         cursor.execute(
             """
             UPDATE regras_fiscais
-            SET palavra_chave = %s,
-                material = %s,
-                ncm = %s,
+            SET ncm = %s,
                 aliquota_icms = %s,
                 aliquota_ipi = %s,
                 observacao = %s,
                 ativo = %s
             WHERE id = %s
             """,
-            (palavra_chave, material, ncm, aliquota_icms, aliquota_ipi, observacao, ativo, id_regra),
+            (ncm, aliquota_icms, aliquota_ipi, observacao, ativo, id_regra),
         )
 
 
@@ -376,27 +488,28 @@ def excluir_regra_fiscal(id_regra):
 
 
 def localizar_regra_fiscal(descricao, material):
+    return None
+
+
+def localizar_regra_fiscal_por_ncm(ncm):
     with _cursor() as cursor:
         cursor.execute(
             """
-            SELECT palavra_chave, material, ncm, aliquota_icms, aliquota_ipi
+            SELECT ncm, aliquota_icms, aliquota_ipi, observacao
             FROM regras_fiscais
             WHERE ativo = 1
-            """
+            AND REPLACE(REPLACE(ncm, '.', ''), ' ', '') = REPLACE(REPLACE(%s, '.', ''), ' ', '')
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(ncm),),
         )
-        regras = cursor.fetchall()
+        linha = cursor.fetchone()
 
-    descricao = str(descricao).upper()
-    material = str(material).upper()
+    if not linha:
+        return None
 
-    for regra in regras:
-        palavra = str(regra[0]).upper()
-        material_regra = str(regra[1]).upper()
-
-        if palavra in descricao and material_regra in material:
-            return {"ncm": regra[2], "icms": regra[3], "ipi": regra[4]}
-
-    return None
+    return {"ncm": linha[0], "icms": linha[1], "ipi": linha[2], "observacao": linha[3]}
 
 
 def inserir_usuario(nome, usuario, senha, perfil):

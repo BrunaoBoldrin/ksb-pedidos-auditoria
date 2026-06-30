@@ -1,7 +1,7 @@
 import re
 import pdfplumber
 import pandas as pd
-from database import localizar_regra_fiscal
+from database import buscar_material_por_codigo, localizar_regra_fiscal_por_ncm
 
 from datetime import datetime
 
@@ -23,6 +23,38 @@ def moeda_para_float(valor):
 
     except:
         return 0.0
+
+
+def normalizar_ncm(valor):
+    return re.sub(r"\D", "", str(valor or ""))
+
+
+def calcular_divisor_base(icms):
+    """Mantém compatibilidade com os fatores que já eram usados no sistema.
+
+    Para as alíquotas conhecidas, usa os divisores originais:
+    ICMS 12% -> 0.7986
+    ICMS 18% -> 0.7442
+
+    Para outros ICMS, usa fallback genérico baseado em ICMS + 9,25%.
+    """
+    try:
+        icms_float = float(icms)
+    except:
+        return 0.7442
+
+    if abs(icms_float - 12.0) < 0.01:
+        return 0.7986
+
+    if abs(icms_float - 18.0) < 0.01:
+        return 0.7442
+
+    divisor = 1 - (icms_float / 100) - 0.0925
+
+    if divisor <= 0:
+        return 0.7442
+
+    return divisor
 
 
 # ====================================
@@ -209,7 +241,7 @@ def processar_pdf(PDF_PATH):
                 break
 
         # ====================================
-        # NCM
+        # NCM DO PEDIDO
         # ====================================
 
         ncm_match = re.search(r"NCM:\s*(.*)", bloco)
@@ -228,10 +260,7 @@ def processar_pdf(PDF_PATH):
         valor_unitario = ""
 
         if valor_unitario_match:
-
-            valor_unitario = (
-                valor_unitario_match.group(1)
-            )
+            valor_unitario = valor_unitario_match.group(1)
 
         # ====================================
         # VALOR TOTAL
@@ -259,79 +288,68 @@ def processar_pdf(PDF_PATH):
         divergencias = []
 
         # ====================================
-        # NCM VIA REGRAS FISCAIS
+        # MATERIAL CADASTRADO -> NCM CADASTRADO -> REGRA FISCAL
         # ====================================
 
-        regra_fiscal = localizar_regra_fiscal(
-                descricao,
-                material
+        material_cadastrado = buscar_material_por_codigo(codigo_material)
+
+        ncm_cadastrado = ""
+        regra_fiscal = None
+        icms_regra = None
+        ipi_regra = None
+
+        if not material_cadastrado:
+            divergencias.append(
+                f"Material KSB não cadastrado na lista de materiais: {codigo_material}"
             )
 
-        if regra_fiscal:
-
-                ncm_correto = regra_fiscal["ncm"]
-
         else:
+            ncm_cadastrado = str(material_cadastrado.get("ncm") or "").strip()
 
-                ncm_correto = ""
-
-            # ====================================
-            # VALIDAÇÃO NCM
-            # ====================================
-
-        if not regra_fiscal:
-
+            if not ncm_cadastrado:
                 divergencias.append(
-                    "Nenhuma regra fiscal encontrada"
+                    f"Material KSB {codigo_material} cadastrado sem NCM"
                 )
 
-        elif str(ncm).strip() != str(ncm_correto).strip():
+            else:
+                regra_fiscal = localizar_regra_fiscal_por_ncm(ncm_cadastrado)
 
-                divergencias.append(
-                    f"""NCM divergente
-            (Esperado: {ncm_correto}
-            | Encontrado: {ncm})"""
-                )
+                if normalizar_ncm(ncm) != normalizar_ncm(ncm_cadastrado):
+                    divergencias.append(
+                        f"NCM divergente (Cadastro: {ncm_cadastrado} | Pedido KSB: {ncm})"
+                    )
+
+                if not regra_fiscal:
+                    divergencias.append(
+                        f"Nenhuma regra fiscal encontrada para o NCM cadastrado: {ncm_cadastrado}"
+                    )
+
+                else:
+                    icms_regra = regra_fiscal["icms"]
+                    ipi_regra = regra_fiscal["ipi"]
 
         # ====================================
         # VALIDACAO VALOR
         # ====================================
 
         quantidade_float = moeda_para_float(quantidade)
-
         valor_unitario_float = moeda_para_float(valor_unitario)
-
         valor_total_float = moeda_para_float(valor_total)
 
-        # ====================================
-        # LATÃO
-        # ====================================
+        valor_calculado = 0.0
 
-        if ncm == "7419.80.90":
-            valor_base = (valor_unitario_float / 0.7986) * quantidade_float
+        if regra_fiscal:
+            divisor_base = calcular_divisor_base(icms_regra)
+            valor_base = (valor_unitario_float / divisor_base) * quantidade_float
+            valor_calculado = valor_base * (1 + (float(ipi_regra or 0) / 100))
+            valor_calculado = round(valor_calculado, 2)
 
-            valor_calculado = valor_base * 1.0325
+            diferenca = abs(valor_calculado - valor_total_float)
 
-        # ====================================
-        # OUTROS
-        # ====================================
-
-        else:
-            valor_base = (valor_unitario_float / 0.7442) * quantidade_float
-
-            valor_calculado = valor_base * 1.065
-
-        valor_calculado = round(valor_calculado, 2)
-
-        diferenca = abs(valor_calculado - valor_total_float)
-
-        if diferenca > 1:
-            divergencias.append(
-                f"""Valor divergente
-(Calculado: {valor_calculado}
-| Pedido: {valor_total_float}
-| Diferença: {round(diferenca, 2)})"""
-            )
+            if diferenca > 1:
+                divergencias.append(
+                    f"Valor divergente (Calculado: {valor_calculado} | Pedido: {valor_total_float} | Diferença: {round(diferenca, 2)})"
+                )
 
         # ====================================
         # LEADTIME
@@ -365,7 +383,13 @@ def processar_pdf(PDF_PATH):
             {
                 "Pedido": numero_pedido,
                 "Item": item,
+                "Código Material": codigo_material,
                 "Status": status_final,
+                "NCM Pedido KSB": ncm,
+                "NCM Cadastro": ncm_cadastrado,
+                "ICMS Regra": icms_regra if icms_regra is not None else "",
+                "IPI Regra": ipi_regra if ipi_regra is not None else "",
+                "Valor Calculado": valor_calculado if regra_fiscal else "",
                 "Leadtime": leadtime,
                 "Divergencias": (" | ".join(divergencias) if divergencias else "-"),
             }
@@ -390,9 +414,13 @@ def processar_pdf(PDF_PATH):
                 "Medida": medida,
                 "Material": material,
                 "Norma": norma,
-                "NCM": ncm,
+                "NCM Pedido KSB": ncm,
+                "NCM Cadastro": ncm_cadastrado,
+                "ICMS Regra": icms_regra if icms_regra is not None else "",
+                "IPI Regra": ipi_regra if ipi_regra is not None else "",
                 "Valor Unitario": valor_unitario,
                 "Valor Total": valor_total,
+                "Valor Calculado": valor_calculado if regra_fiscal else "",
             }
         )
 
