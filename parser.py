@@ -47,11 +47,11 @@ def calcular_divisor_base(icms):
     except Exception:
         return 0.7442
 
-    if abs(icms_float - 12.0) < 0.01:
-        return 0.7986
 
-    if abs(icms_float - 18.0) < 0.01:
-        return 0.7442
+def texto_regra(regra):
+    if not regra:
+        return "Regra fiscal não cadastrada"
+    return str(regra.get("observacao") or "Sem observação cadastrada").strip()
 
     divisor = 1 - (icms_float / 100) - PIS_COFINS_PERCENTUAL
     if divisor <= 0:
@@ -408,6 +408,9 @@ def processar_pdf(PDF_PATH):
                     ],
                 )
             )
+
+        if not diagnosticos:
+            diagnosticos.append("Item sem divergências identificadas.")
 
         if not diagnosticos:
             diagnosticos.append("Item sem divergências identificadas.")
