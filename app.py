@@ -59,18 +59,38 @@ def texto_pdf(valor):
     return escape(str(valor_texto({"v": valor}, "v")))
 
 
-def gerar_pdf_auditoria(df_analise, codigo_pedido):
+def pedidos_unicos(df_analise):
+    if "Pedido" not in df_analise.columns:
+        return []
+    pedidos = []
+    for pedido in df_analise["Pedido"].dropna():
+        pedido_texto = valor_texto({"Pedido": pedido}, "Pedido", "")
+        if pedido_texto and pedido_texto not in pedidos:
+            pedidos.append(pedido_texto)
+    return pedidos
+
+
+def titulo_avaliacao_pedidos(df_analise):
+    pedidos = pedidos_unicos(df_analise)
+    if not pedidos:
+        return "Avaliação do Pedido sem código"
+    if len(pedidos) == 1:
+        return f"Avaliação do Pedido {pedidos[0]}"
+    return f"Avaliação dos Pedidos {' - '.join(pedidos)}"
+
+
+def gerar_pdf_auditoria(df_analise, codigo_pedido=None):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=28, leftMargin=28, topMargin=28, bottomMargin=28)
     styles = getSampleStyleSheet()
     elementos = []
-    pedido = codigo_pedido or "sem código"
+    titulo_pedidos = titulo_avaliacao_pedidos(df_analise)
     total = len(df_analise)
     ok = len(df_analise[df_analise["Status"] == "OK"]) if "Status" in df_analise.columns else 0
     divergentes = len(df_analise[df_analise["Status"] == "DIVERGENTE"]) if "Status" in df_analise.columns else 0
     primeira = df_analise.iloc[0] if total else {}
 
-    elementos.append(Paragraph(f"Avaliação do Pedido {texto_pdf(pedido)}", styles["Title"]))
+    elementos.append(Paragraph(texto_pdf(titulo_pedidos), styles["Title"]))
     elementos.append(Paragraph(f"Data de emissão: {texto_pdf(valor_texto(primeira, 'Data Emissão'))} | Unidade: {texto_pdf(valor_texto(primeira, 'Unidade Pedido'))} | Comprador: {texto_pdf(valor_texto(primeira, 'Comprador'))}", styles["Normal"]))
     elementos.append(Spacer(1, 10))
     resumo = Table([["Itens analisados", "OK", "Divergentes"], [total, ok, divergentes]], hAlign="LEFT")
@@ -79,7 +99,7 @@ def gerar_pdf_auditoria(df_analise, codigo_pedido):
 
     for _, linha in df_analise.iterrows():
         status = valor_texto(linha, "Status")
-        titulo = f"Item {valor_texto(linha, 'Item')} - {valor_texto(linha, 'Código Material')} - {status}"
+        titulo = f"Pedido {valor_texto(linha, 'Pedido')} - Item {valor_texto(linha, 'Item')} - Material {valor_texto(linha, 'Código Material')} - {status}"
         elementos.append(Paragraph(texto_pdf(titulo), styles["Heading3"]))
         dados = [
             ["Descrição", valor_texto(linha, "Descrição")],
@@ -91,7 +111,17 @@ def gerar_pdf_auditoria(df_analise, codigo_pedido):
             ["Pedido x Calculado", f"Pedido {formatar_moeda(linha.get('Valor Pedido'))} | Calculado {formatar_moeda(linha.get('Valor Calculado'))} | Diferença {formatar_moeda(linha.get('Diferença'))}"],
             ["Diagnóstico", valor_texto(linha, "Diagnóstico")],
         ]
-        dados = [[texto_pdf(celula) for celula in linha_dados] for linha_dados in dados]
+        campos_longos = {"Descrição", "Impostos", "Valores", "Pedido x Calculado", "Diagnóstico"}
+        dados = [
+            [
+                texto_pdf(rotulo),
+                Paragraph(
+                    texto_pdf(valor).replace(" | ", "<br/>") if rotulo in campos_longos else texto_pdf(valor),
+                    styles["BodyText"],
+                ),
+            ]
+            for rotulo, valor in dados
+        ]
         tabela = Table(dados, colWidths=[105, 395])
         tabela.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, colors.grey), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke)]))
         elementos.extend([tabela, Spacer(1, 10)])
@@ -115,7 +145,7 @@ def exibir_cards_auditoria(df_analise_final):
         status = valor_texto(linha, "Status")
         cor = "#0f8a3b" if status == "OK" else "#b42318"
         with st.container(border=True):
-            st.markdown(f"### <span style='color:{cor}'>{'✅' if status == 'OK' else '❌'} {status}</span> — Item {valor_texto(linha, 'Item')} | Material {valor_texto(linha, 'Código Material')}", unsafe_allow_html=True)
+            st.markdown(f"### <span style='color:{cor}'>{'✅' if status == 'OK' else '❌'} {status}</span> — Pedido {valor_texto(linha, 'Pedido')} | Item {valor_texto(linha, 'Item')} | Material {valor_texto(linha, 'Código Material')}", unsafe_allow_html=True)
             c1, c2, c3 = st.columns(3)
             c1.write(f"**Descrição:** {valor_texto(linha, 'Descrição')}")
             c1.write(f"**Quantidade:** {valor_texto(linha, 'Quantidade')} {valor_texto(linha, 'Unidade')}")
@@ -134,6 +164,69 @@ def exibir_cards_auditoria(df_analise_final):
                 if valor_texto(linha, "Descrição NCM Pedido", ""):
                     st.caption(f"NCM do pedido: {valor_texto(linha, 'NCM Pedido KSB')} - {valor_texto(linha, 'Descrição NCM Pedido')}")
                     st.caption(f"NCM correto: {valor_texto(linha, 'NCM Cadastro')} - {valor_texto(linha, 'Descrição NCM Cadastro')}")
+
+
+def exibir_cards_comercial(df_analise_final):
+    if "Status Comercial" not in df_analise_final.columns:
+        return
+
+    st.divider()
+    st.subheader("💼 Etapa 2 — Análise Comercial")
+
+    total = len(df_analise_final)
+    ok = len(df_analise_final[df_analise_final["Status Comercial"] == "OK"])
+    pendentes_revisao = len(df_analise_final[df_analise_final["Status Comercial"] == "PENDENTE - REVISÃO DE PREÇO"])
+    pendentes_cadastro_preco = len(
+        df_analise_final[
+            df_analise_final["Status Comercial"].isin(
+                ["PENDENTE - MATERIAL SEM CADASTRO", "PENDENTE - PREÇO NÃO CADASTRADO"]
+            )
+        ]
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Itens analisados", total)
+    c2.metric("Itens OK", ok)
+    c3.metric("Pendentes revisão de preço", pendentes_revisao)
+    c4.metric("Pendentes cadastro/preço", pendentes_cadastro_preco)
+
+    for _, linha in df_analise_final.iterrows():
+        status = valor_texto(linha, "Status Comercial")
+        if status == "OK":
+            cor = "#0f8a3b"
+            icone = "✅"
+        elif status == "PENDENTE - REVISÃO DE PREÇO":
+            cor = "#b7791f"
+            icone = "⚠️"
+        else:
+            cor = "#b42318"
+            icone = "❌"
+
+        with st.container(border=True):
+            st.markdown(
+                f"### <span style='color:{cor}'>{icone} Pedido {valor_texto(linha, 'Pedido')} | "
+                f"Item {valor_texto(linha, 'Item')} | Material {valor_texto(linha, 'Código Material')} | {status}</span>",
+                unsafe_allow_html=True,
+            )
+            st.write(f"**Descrição:** {valor_texto(linha, 'Descrição')}")
+            p1, p2, p3, p4 = st.columns(4)
+            p1.metric("Preço Pedido KSB", formatar_moeda(linha.get("Preço Pedido KSB")))
+            p2.metric("Preço Cadastrado", formatar_moeda(linha.get("Preço Cadastrado")))
+            p3.metric("Diferença Preço", formatar_moeda(linha.get("Diferença Preço")))
+            p4.metric("Percentual Diferença", f"{valor_texto(linha, 'Percentual Diferença Preço')}%")
+
+            l1, l2, l3 = st.columns(3)
+            l1.metric("Leadtime Dias", valor_texto(linha, "Leadtime Dias"))
+            l2.write(f"**Última Revisão Preço:** {valor_texto(linha, 'Data Última Revisão Preço')}")
+            l3.write(f"**Usuário Última Revisão Preço:** {valor_texto(linha, 'Usuário Última Revisão Preço')}")
+
+            diagnostico = valor_texto(linha, "Diagnóstico Comercial")
+            if status == "OK":
+                st.success(f"**Diagnóstico Comercial:** {diagnostico}")
+            elif status == "PENDENTE - REVISÃO DE PREÇO":
+                st.warning(f"**Diagnóstico Comercial:** {diagnostico}")
+            else:
+                st.error(f"**Diagnóstico Comercial:** {diagnostico}")
 
 
 def limpar_texto(valor):
@@ -292,12 +385,13 @@ if menu == "📄 Análise de Pedidos KSB":
             df_final = pd.concat(todos_dados, ignore_index=True)
             df_analise_final = pd.concat(todas_analises, ignore_index=True)
             exibir_cards_auditoria(df_analise_final)
-            codigo_pedido = str(df_analise_final.iloc[0]["Pedido"]) if not df_analise_final.empty else ""
-            pdf_bytes = gerar_pdf_auditoria(df_analise_final, codigo_pedido)
+            exibir_cards_comercial(df_analise_final)
+            nome_avaliacao_pdf = titulo_avaliacao_pedidos(df_analise_final)
+            pdf_bytes = gerar_pdf_auditoria(df_analise_final)
             st.download_button(
                 "📄 Baixar Avaliação em PDF",
                 pdf_bytes,
-                f"Avaliação do Pedido {codigo_pedido}.pdf",
+                f"{nome_avaliacao_pdf}.pdf",
                 "application/pdf",
             )
             st.divider()

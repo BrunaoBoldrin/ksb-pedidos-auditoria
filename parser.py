@@ -40,6 +40,31 @@ def percentual_para_decimal(valor):
         return 0.0
 
 
+def numero_para_float(valor):
+    if valor in [None, ""]:
+        return 0.0
+    if isinstance(valor, (int, float)):
+        return float(valor)
+
+    texto = str(valor).strip()
+    if not texto or texto.lower() in ["nan", "none"]:
+        return 0.0
+
+    if "," in texto:
+        return moeda_para_float(texto)
+
+    try:
+        return float(texto)
+    except Exception:
+        return moeda_para_float(texto)
+
+
+def formatar_moeda_texto(valor):
+    try:
+        return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,00"
+
 
 def calcular_divisor_base(icms):
     try:
@@ -53,7 +78,7 @@ def calcular_divisor_base(icms):
     if abs(icms_float - 18.0) < 0.01:
         return 0.7442
 
-divisor = 1 - (icms_float / 100) - PIS_COFINS_PERCENTUAL
+    divisor = 1 - (icms_float / 100) - PIS_COFINS_PERCENTUAL
     if divisor <= 0:
         return 0.7442
     return divisor
@@ -421,19 +446,54 @@ def processar_pdf(PDF_PATH):
         if not diagnosticos:
             diagnosticos.append("Item sem divergências identificadas.")
 
-        if not diagnosticos:
-            diagnosticos.append("Item sem divergências identificadas.")
+        # ====================================
+        # ANALISE COMERCIAL
+        # ====================================
+
+        preco_pedido_ksb = valor_unitario_float
+        preco_cadastrado = 0.0
+        diferenca_preco = 0.0
+        percentual_diferenca_preco = 0.0
+        data_ultima_revisao_preco = ""
+        usuario_ultima_revisao_preco = ""
+
+        if not material_cadastrado:
+            status_comercial = "PENDENTE - MATERIAL SEM CADASTRO"
+            diagnostico_comercial = "Material não cadastrado. Cadastre o material para validar preço e revisão comercial."
+        else:
+            preco_cadastrado = numero_para_float(material_cadastrado.get("preco_unitario_liquido"))
+            data_ultima_revisao_preco = str(material_cadastrado.get("data_ultima_revisao") or "")
+            usuario_ultima_revisao_preco = str(material_cadastrado.get("usuario_ultima_revisao_preco") or "")
+            diferenca_preco = round(preco_pedido_ksb - preco_cadastrado, 2)
+            percentual_diferenca_preco = round((diferenca_preco / preco_cadastrado) * 100, 2) if preco_cadastrado else 0.0
+
+            if preco_cadastrado <= 0:
+                status_comercial = "PENDENTE - PREÇO NÃO CADASTRADO"
+                diagnostico_comercial = "Material cadastrado sem preço unitário líquido. Informe o preço cadastrado para concluir a análise comercial."
+            elif abs(diferenca_preco) > 0.01:
+                status_comercial = "PENDENTE - REVISÃO DE PREÇO"
+                diagnostico_comercial = (
+                    f"Preço do pedido KSB: {formatar_moeda_texto(preco_pedido_ksb)} | "
+                    f"Preço cadastrado: {formatar_moeda_texto(preco_cadastrado)} | "
+                    f"Diferença: {formatar_moeda_texto(diferenca_preco)} | "
+                    f"Última revisão: {data_ultima_revisao_preco or '-'} | "
+                    f"Revisado por: {usuario_ultima_revisao_preco or '-'}. "
+                    "Necessário revisar preço cadastrado ou negociar pedido."
+                )
+            else:
+                status_comercial = "OK"
+                diagnostico_comercial = "Preço líquido unitário do pedido KSB igual ao preço cadastrado."
 
         # ====================================
         # LEADTIME
         # ====================================
 
         try:
-            data_upload = datetime.today()
+            data_analise = datetime.today().date()
 
-            data_entrega_dt = datetime.strptime(data_entrega, "%d.%m.%Y")
+            data_entrega_dt = datetime.strptime(data_entrega, "%d.%m.%Y").date()
 
-            leadtime = (data_entrega_dt - data_upload).days
+            leadtime = (data_entrega_dt - data_analise).days
 
         except:
             leadtime = "Erro"
@@ -481,6 +541,15 @@ def processar_pdf(PDF_PATH):
                 "Diferença": diferenca_assinada if regra_fiscal else "",
                 "Diagnóstico": " | ".join(diagnosticos),
                 "Divergencias": (" | ".join(divergencias) if divergencias else "-"),
+                "Status Comercial": status_comercial,
+                "Preço Pedido KSB": preco_pedido_ksb,
+                "Preço Cadastrado": preco_cadastrado if material_cadastrado else "",
+                "Diferença Preço": diferenca_preco if material_cadastrado else "",
+                "Percentual Diferença Preço": percentual_diferenca_preco if material_cadastrado else "",
+                "Data Última Revisão Preço": data_ultima_revisao_preco,
+                "Usuário Última Revisão Preço": usuario_ultima_revisao_preco,
+                "Leadtime Dias": leadtime,
+                "Diagnóstico Comercial": diagnostico_comercial,
                 "Leadtime": leadtime,
             }
         )
