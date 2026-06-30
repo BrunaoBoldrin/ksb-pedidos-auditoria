@@ -254,6 +254,69 @@ def exibir_cards_auditoria(df_analise_final):
                 st.warning(f"**Diagnóstico Comercial:** {valor_texto(linha, 'Diagnóstico Comercial')}")
 
 
+def exibir_cards_comercial(df_analise_final):
+    if "Status Comercial" not in df_analise_final.columns:
+        return
+
+    st.divider()
+    st.subheader("💼 Etapa 2 — Análise Comercial")
+
+    total = len(df_analise_final)
+    ok = len(df_analise_final[df_analise_final["Status Comercial"] == "OK"])
+    pendentes_revisao = len(df_analise_final[df_analise_final["Status Comercial"] == "PENDENTE - REVISÃO DE PREÇO"])
+    pendentes_cadastro_preco = len(
+        df_analise_final[
+            df_analise_final["Status Comercial"].isin(
+                ["PENDENTE - MATERIAL SEM CADASTRO", "PENDENTE - PREÇO NÃO CADASTRADO"]
+            )
+        ]
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Itens analisados", total)
+    c2.metric("Itens OK", ok)
+    c3.metric("Pendentes revisão de preço", pendentes_revisao)
+    c4.metric("Pendentes cadastro/preço", pendentes_cadastro_preco)
+
+    for _, linha in df_analise_final.iterrows():
+        status = valor_texto(linha, "Status Comercial")
+        if status == "OK":
+            cor = "#0f8a3b"
+            icone = "✅"
+        elif status == "PENDENTE - REVISÃO DE PREÇO":
+            cor = "#b7791f"
+            icone = "⚠️"
+        else:
+            cor = "#b42318"
+            icone = "❌"
+
+        with st.container(border=True):
+            st.markdown(
+                f"### <span style='color:{cor}'>{icone} Pedido {valor_texto(linha, 'Pedido')} | "
+                f"Item {valor_texto(linha, 'Item')} | Material {valor_texto(linha, 'Código Material')} | {status}</span>",
+                unsafe_allow_html=True,
+            )
+            st.write(f"**Descrição:** {valor_texto(linha, 'Descrição')}")
+            p1, p2, p3, p4 = st.columns(4)
+            p1.metric("Preço Pedido KSB", formatar_moeda(linha.get("Preço Pedido KSB")))
+            p2.metric("Preço Cadastrado", formatar_moeda(linha.get("Preço Cadastrado")))
+            p3.metric("Diferença Preço", formatar_moeda(linha.get("Diferença Preço")))
+            p4.metric("Percentual Diferença", f"{valor_texto(linha, 'Percentual Diferença Preço')}%")
+
+            l1, l2, l3 = st.columns(3)
+            l1.metric("Leadtime Dias", valor_texto(linha, "Leadtime Dias"))
+            l2.write(f"**Última Revisão Preço:** {valor_texto(linha, 'Data Última Revisão Preço')}")
+            l3.write(f"**Usuário Última Revisão Preço:** {valor_texto(linha, 'Usuário Última Revisão Preço')}")
+
+            diagnostico = valor_texto(linha, "Diagnóstico Comercial")
+            if status == "OK":
+                st.success(f"**Diagnóstico Comercial:** {diagnostico}")
+            elif status == "PENDENTE - REVISÃO DE PREÇO":
+                st.warning(f"**Diagnóstico Comercial:** {diagnostico}")
+            else:
+                st.error(f"**Diagnóstico Comercial:** {diagnostico}")
+
+
 def limpar_texto(valor):
     if pd.isna(valor):
         return ""
