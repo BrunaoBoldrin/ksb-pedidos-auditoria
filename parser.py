@@ -36,23 +36,10 @@ def percentual_para_decimal(valor):
         return 0.0
 
 
-
-def calcular_divisor_base(icms):
-    try:
-        icms_float = float(icms or 0)
-    except Exception:
-        return 0.7442
-
-    if abs(icms_float - 12.0) < 0.01:
-        return 0.7986
-
-    if abs(icms_float - 18.0) < 0.01:
-        return 0.7442
-
-    divisor = 1 - (icms_float / 100) - 0.0925
-    if divisor <= 0:
-        return 0.7442
-    return divisor
+def texto_regra(regra):
+    if not regra:
+        return "Regra fiscal não cadastrada"
+    return str(regra.get("observacao") or "Sem observação cadastrada").strip()
 
 
 def diagnosticar_imposto_na_diferenca(diferenca, impostos):
@@ -381,8 +368,7 @@ def processar_pdf(PDF_PATH):
         aliquota_icms = percentual_para_decimal(icms_regra)
         aliquota_ipi = percentual_para_decimal(ipi_regra)
 
-        divisor_base = calcular_divisor_base(icms_regra)
-        valor_base = round((valor_unitario_float / divisor_base) * quantidade_float, 2) if regra_fiscal else 0.0
+        valor_base = round(valor_unitario_float * quantidade_float, 2)
         valor_icms = round(valor_base * aliquota_icms, 2)
         valor_pis_cofins = round(valor_base * 0.0925, 2)
         valor_ipi = round(valor_base * aliquota_ipi, 2)
@@ -394,16 +380,14 @@ def processar_pdf(PDF_PATH):
             divergencias.append(
                 f"Valor divergente (Calculado: {valor_calculado} | Pedido: {valor_total_float} | Diferença: {round(diferenca, 2)})"
             )
-            diagnosticos.append(
-                diagnosticar_imposto_na_diferenca(
-                    diferenca,
-                    [
-                        ("ICMS", valor_icms),
-                        ("PIS/COFINS", valor_pis_cofins),
-                        ("IPI", valor_ipi),
-                    ],
+            if valor_ipi and abs(diferenca - abs(valor_ipi)) <= max(1, abs(valor_ipi) * 0.05):
+                diagnosticos.append(
+                    f"Possível ausência de IPI: diferença de {round(diferenca, 2)} aproxima o IPI calculado de {valor_ipi}."
                 )
-            )
+            else:
+                diagnosticos.append(
+                    "Valor do pedido diverge do valor calculado com base líquida e IPI da regra fiscal."
+                )
 
         if not diagnosticos:
             diagnosticos.append("Item sem divergências identificadas.")
