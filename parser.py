@@ -42,6 +42,21 @@ def texto_regra(regra):
     return str(regra.get("observacao") or "Sem observação cadastrada").strip()
 
 
+def diagnosticar_imposto_na_diferenca(diferenca, impostos):
+    for nome, valor in impostos:
+        if valor and abs(abs(diferenca) - abs(valor)) <= 1:
+            return (
+                f"A diferença encontrada corresponde aproximadamente ao valor do {nome}, "
+                "indicando que este imposto pode não estar discriminado no pedido KSB."
+            )
+    return "Valor do pedido diverge do valor calculado com base líquida, divisor fiscal e IPI da regra fiscal."
+
+def texto_regra(regra):
+    if not regra:
+        return "Regra fiscal não cadastrada"
+    return str(regra.get("observacao") or "Sem observação cadastrada").strip()
+
+
 # ====================================
 # PROCESSAR PDF
 # ====================================
