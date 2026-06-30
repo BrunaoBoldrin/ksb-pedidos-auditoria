@@ -49,12 +49,7 @@ def calcular_divisor_base(icms):
     if abs(icms_float - 18.0) < 0.01:
         return 0.7442
 
-    divisor = 1 - (icms_float / 100) - 0.0925
-
-    if divisor <= 0:
-        return 0.7442
-
-    return divisor
+    
 
 
 # ====================================
