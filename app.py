@@ -86,8 +86,8 @@ def gerar_pdf_auditoria(df_analise, codigo_pedido):
             ["Qtd/Unidade", f"{valor_texto(linha, 'Quantidade')} {valor_texto(linha, 'Unidade')}"] ,
             ["NCM Pedido", valor_texto(linha, "NCM Pedido KSB")],
             ["NCM Cadastro", valor_texto(linha, "NCM Cadastro")],
-            ["Impostos", f"ICMS {valor_texto(linha, 'ICMS Regra')}% | PIS/COFINS 9,25% | IPI {valor_texto(linha, 'IPI Regra')}%"],
-            ["Valores", f"Base {formatar_moeda(linha.get('Valor Base'))} | ICMS {formatar_moeda(linha.get('Valor ICMS'))} | PIS/COFINS {formatar_moeda(linha.get('Valor PIS/COFINS'))} | IPI {formatar_moeda(linha.get('Valor IPI'))}"],
+            ["Impostos", f"ICMS {valor_texto(linha, 'ICMS Regra')}% — {formatar_moeda(linha.get('Valor ICMS'))} | PIS/COFINS 9,25% — {formatar_moeda(linha.get('Valor PIS/COFINS'))} | IPI {valor_texto(linha, 'IPI Regra')}% — {formatar_moeda(linha.get('Valor IPI'))}"],
+            ["Valores", f"Líquido unitário {formatar_moeda(linha.get('Valor Unitário Líquido'))} | Base {formatar_moeda(linha.get('Valor Base'))} | Pedido {formatar_moeda(linha.get('Valor Pedido'))} | Diferença {formatar_moeda(linha.get('Diferença'))}"],
             ["Pedido x Calculado", f"Pedido {formatar_moeda(linha.get('Valor Pedido'))} | Calculado {formatar_moeda(linha.get('Valor Calculado'))} | Diferença {formatar_moeda(linha.get('Diferença'))}"],
             ["Diagnóstico", valor_texto(linha, "Diagnóstico")],
         ]
@@ -121,12 +121,12 @@ def exibir_cards_auditoria(df_analise_final):
             c1.write(f"**Quantidade:** {valor_texto(linha, 'Quantidade')} {valor_texto(linha, 'Unidade')}")
             c2.write(f"**NCM Pedido:** {valor_texto(linha, 'NCM Pedido KSB')}")
             c2.write(f"**NCM Cadastro:** {valor_texto(linha, 'NCM Cadastro')}")
-            c3.write(f"**ICMS:** {valor_texto(linha, 'ICMS Regra')}%")
-            c3.write("**PIS/COFINS:** 9,25%")
-            c3.write(f"**IPI:** {valor_texto(linha, 'IPI Regra')}%")
+            c3.write(f"**ICMS:** {valor_texto(linha, 'ICMS Regra')}% — {formatar_moeda(linha.get('Valor ICMS'))}")
+            c3.write(f"**PIS/COFINS:** 9,25% — {formatar_moeda(linha.get('Valor PIS/COFINS'))}")
+            c3.write(f"**IPI:** {valor_texto(linha, 'IPI Regra')}% — {formatar_moeda(linha.get('Valor IPI'))}")
             v1, v2, v3, v4 = st.columns(4)
-            v1.metric("Valor Base", formatar_moeda(linha.get("Valor Base")))
-            v2.metric("Valor IPI", formatar_moeda(linha.get("Valor IPI")))
+            v1.metric("Líquido Unitário", formatar_moeda(linha.get("Valor Unitário Líquido")))
+            v2.metric("Valor Base", formatar_moeda(linha.get("Valor Base")))
             v3.metric("Valor Pedido", formatar_moeda(linha.get("Valor Pedido")))
             v4.metric("Diferença", formatar_moeda(linha.get("Diferença")))
             if status != "OK":
