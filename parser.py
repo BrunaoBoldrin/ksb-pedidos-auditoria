@@ -10,6 +10,10 @@ from datetime import datetime
 # ====================================
 
 
+PIS_COFINS_PERCENTUAL = 0.0925
+TOLERANCIA_IMPOSTO = 1.00
+
+
 def moeda_para_float(valor):
     valor = str(valor)
 
@@ -29,18 +33,18 @@ def normalizar_ncm(valor):
     return re.sub(r"\D", "", str(valor or ""))
 
 
-def calcular_divisor_base(icms):
-    """Mantém compatibilidade com os fatores que já eram usados no sistema.
-
-    Para as alíquotas conhecidas, usa os divisores originais:
-    ICMS 12% -> 0.7986
-    ICMS 18% -> 0.7442
-
-    Para outros ICMS, usa fallback genérico baseado em ICMS + 9,25%.
-    """
+def percentual_para_decimal(valor):
     try:
-        icms_float = float(icms)
-    except:
+        return float(valor or 0) / 100
+    except Exception:
+        return 0.0
+
+
+
+def calcular_divisor_base(icms):
+    try:
+        icms_float = float(icms or 0)
+    except Exception:
         return 0.7442
 
     if abs(icms_float - 12.0) < 0.01:
@@ -49,12 +53,25 @@ def calcular_divisor_base(icms):
     if abs(icms_float - 18.0) < 0.01:
         return 0.7442
 
-    divisor = 1 - (icms_float / 100) - 0.0925
-
+    divisor = 1 - (icms_float / 100) - PIS_COFINS_PERCENTUAL
     if divisor <= 0:
         return 0.7442
-
     return divisor
+
+
+def diagnosticar_imposto_na_diferenca(diferenca, impostos):
+    for nome, valor in impostos:
+        if valor and abs(abs(diferenca) - abs(valor)) <= TOLERANCIA_IMPOSTO:
+            return (
+                f"A diferença encontrada corresponde aproximadamente ao valor do {nome}, "
+                "indicando que este imposto pode não estar discriminado no pedido KSB."
+            )
+    return "Valor do pedido diverge do valor calculado com base líquida, divisor fiscal e IPI da regra fiscal."
+
+def texto_regra(regra):
+    if not regra:
+        return "Regra fiscal não cadastrada"
+    return str(regra.get("observacao") or "Sem observação cadastrada").strip()
 
 
 # ====================================
@@ -286,6 +303,7 @@ def processar_pdf(PDF_PATH):
         # ====================================
 
         divergencias = []
+        diagnosticos = []
 
         # ====================================
         # MATERIAL CADASTRADO -> NCM CADASTRADO -> REGRA FISCAL
@@ -295,12 +313,25 @@ def processar_pdf(PDF_PATH):
 
         ncm_cadastrado = ""
         regra_fiscal = None
+        regra_fiscal_pedido = None
         icms_regra = None
         ipi_regra = None
+        observacao_ncm_pedido = ""
+        observacao_ncm_cadastro = ""
+        descricao_ncm_pedido = ""
+        descricao_ncm_cadastro = ""
+        ncm_divergente = False
+
+        if ncm:
+            regra_fiscal_pedido = localizar_regra_fiscal_por_ncm(ncm)
+            observacao_ncm_pedido = texto_regra(regra_fiscal_pedido)
 
         if not material_cadastrado:
             divergencias.append(
                 f"Material KSB não cadastrado na lista de materiais: {codigo_material}"
+            )
+            diagnosticos.append(
+                "Material não encontrado no cadastro. Cadastre o material para validar NCM, impostos e valores."
             )
 
         else:
@@ -310,18 +341,34 @@ def processar_pdf(PDF_PATH):
                 divergencias.append(
                     f"Material KSB {codigo_material} cadastrado sem NCM"
                 )
+                diagnosticos.append(
+                    "Material cadastrado sem NCM. Informe o NCM no cadastro do material para concluir a auditoria."
+                )
 
             else:
                 regra_fiscal = localizar_regra_fiscal_por_ncm(ncm_cadastrado)
+                observacao_ncm_cadastro = texto_regra(regra_fiscal)
 
                 if normalizar_ncm(ncm) != normalizar_ncm(ncm_cadastrado):
+                    ncm_divergente = True
+                    descricao_ncm_pedido = observacao_ncm_pedido
+                    descricao_ncm_cadastro = observacao_ncm_cadastro
                     divergencias.append(
                         f"NCM divergente (Cadastro: {ncm_cadastrado} | Pedido KSB: {ncm})"
+                    )
+                    diagnosticos.append(
+                        f"NCM do pedido: {ncm} - {observacao_ncm_pedido}"
+                    )
+                    diagnosticos.append(
+                        f"NCM correto: {ncm_cadastrado} - {observacao_ncm_cadastro}"
                     )
 
                 if not regra_fiscal:
                     divergencias.append(
                         f"Nenhuma regra fiscal encontrada para o NCM cadastrado: {ncm_cadastrado}"
+                    )
+                    diagnosticos.append(
+                        "Regra fiscal não localizada para o NCM correto do cadastro. Cadastre a regra fiscal para validar os impostos."
                     )
 
                 else:
@@ -335,21 +382,35 @@ def processar_pdf(PDF_PATH):
         quantidade_float = moeda_para_float(quantidade)
         valor_unitario_float = moeda_para_float(valor_unitario)
         valor_total_float = moeda_para_float(valor_total)
+        aliquota_icms = percentual_para_decimal(icms_regra)
+        aliquota_ipi = percentual_para_decimal(ipi_regra)
 
-        valor_calculado = 0.0
+        divisor_base = calcular_divisor_base(icms_regra)
+        valor_base = round((valor_unitario_float / divisor_base) * quantidade_float, 2) if regra_fiscal else 0.0
+        valor_icms = round(valor_base * aliquota_icms, 2)
+        valor_pis_cofins = round(valor_base * PIS_COFINS_PERCENTUAL, 2)
+        valor_ipi = round(valor_base * aliquota_ipi, 2)
+        valor_calculado = round(valor_base + valor_ipi, 2) if regra_fiscal else 0.0
+        diferenca_assinada = round(valor_calculado - valor_total_float, 2) if regra_fiscal else 0.0
+        diferenca = abs(diferenca_assinada)
 
-        if regra_fiscal:
-            divisor_base = calcular_divisor_base(icms_regra)
-            valor_base = (valor_unitario_float / divisor_base) * quantidade_float
-            valor_calculado = valor_base * (1 + (float(ipi_regra or 0) / 100))
-            valor_calculado = round(valor_calculado, 2)
-
-            diferenca = abs(valor_calculado - valor_total_float)
-
-            if diferenca > 1:
-                divergencias.append(
-                    f"Valor divergente (Calculado: {valor_calculado} | Pedido: {valor_total_float} | Diferença: {round(diferenca, 2)})"
+        if regra_fiscal and diferenca > 1:
+            divergencias.append(
+                f"Valor divergente (Calculado: {valor_calculado} | Pedido: {valor_total_float} | Diferença: {round(diferenca, 2)})"
+            )
+            diagnosticos.append(
+                diagnosticar_imposto_na_diferenca(
+                    diferenca,
+                    [
+                        ("ICMS", valor_icms),
+                        ("PIS/COFINS", valor_pis_cofins),
+                        ("IPI", valor_ipi),
+                    ],
                 )
+            )
+
+        if not diagnosticos:
+            diagnosticos.append("Item sem divergências identificadas.")
 
         # ====================================
         # LEADTIME
@@ -382,16 +443,33 @@ def processar_pdf(PDF_PATH):
         analises.append(
             {
                 "Pedido": numero_pedido,
+                "Data Emissão": data_emissao,
+                "Unidade Pedido": unidade,
+                "Comprador": comprador,
                 "Item": item,
                 "Código Material": codigo_material,
+                "Descrição": descricao,
+                "Quantidade": quantidade_float,
+                "Unidade": unidade_item,
                 "Status": status_final,
                 "NCM Pedido KSB": ncm,
+                "Descrição NCM Pedido": descricao_ncm_pedido if ncm_divergente else "",
                 "NCM Cadastro": ncm_cadastrado,
+                "Descrição NCM Cadastro": descricao_ncm_cadastro if ncm_divergente else "",
                 "ICMS Regra": icms_regra if icms_regra is not None else "",
+                "PIS/COFINS Regra": "9,25%",
                 "IPI Regra": ipi_regra if ipi_regra is not None else "",
+                "Valor Unitário Líquido": valor_unitario_float,
+                "Valor Base": valor_base,
+                "Valor ICMS": valor_icms,
+                "Valor PIS/COFINS": valor_pis_cofins,
+                "Valor IPI": valor_ipi,
+                "Valor Pedido": valor_total_float,
                 "Valor Calculado": valor_calculado if regra_fiscal else "",
-                "Leadtime": leadtime,
+                "Diferença": diferenca_assinada if regra_fiscal else "",
+                "Diagnóstico": " | ".join(diagnosticos),
                 "Divergencias": (" | ".join(divergencias) if divergencias else "-"),
+                "Leadtime": leadtime,
             }
         )
 
