@@ -257,7 +257,7 @@ def exibir_cards_auditoria(df_analise_final):
             exibir_diagnostico_fiscal(linha, status_fiscal)
             exibir_diagnostico_comercial(linha, status_comercial)
 
-            with st.expander("▶ Ver detalhes da auditoria fiscal"):
+            with st.expander("Ver detalhes da auditoria fiscal"):
                 f1, f2, f3 = st.columns(3)
                 f1.write(f"**NCM Pedido KSB:** {valor_texto(linha, 'NCM Pedido KSB')}")
                 f1.write(f"**NCM Cadastro:** {valor_texto(linha, 'NCM Cadastro')}")
@@ -268,12 +268,12 @@ def exibir_cards_auditoria(df_analise_final):
 
                 valores_fiscais = st.columns(3)
                 valores_fiscais[0].metric("Valor Total c/ Imposto s/ IPI", formatar_moeda(linha.get("Valor Base")))
-                valores_fiscais[1].metric("Valor Pedido Total c/ Imposto", formatar_moeda(linha.get("Valor Pedido")))
+                valores_fiscais[1].metric("Valor Pedido Total c/ Imposto e IPI", formatar_moeda(linha.get("Valor Pedido")))
                 valores_fiscais[2].metric("Valor Calculado Total c/ Imposto e IPI", formatar_moeda(linha.get("Valor Calculado")))
                 if diferenca_monetaria_relevante(linha.get("Diferença")):
                     st.metric("Diferença Fiscal", formatar_moeda(linha.get("Diferença")))
 
-            with st.expander("▶ Ver detalhes da análise comercial"):
+            with st.expander("Ver detalhes da análise comercial"):
                 c1, c2 = st.columns(2)
                 c1.metric("Preço Pedido KSB", formatar_moeda(linha.get("Preço Pedido KSB")))
                 c2.metric("Preço Cadastrado", formatar_moeda(linha.get("Preço Cadastrado")))
