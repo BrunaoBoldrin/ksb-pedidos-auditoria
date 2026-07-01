@@ -471,7 +471,7 @@ usuario_revisao_atual = st.session_state.nome_usuario or st.session_state.usuari
 
 with st.sidebar:
     st.success(f"👤 {st.session_state.nome_usuario}")
-    st.caption(f"Perfil: {perfil}")
+    
     if st.button("🚪 Logout"):
         st.session_state.usuario_logado = None
         st.session_state.nome_usuario = None
