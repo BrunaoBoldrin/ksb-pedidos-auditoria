@@ -91,15 +91,40 @@ def texto_regra(regra):
     return str(regra.get("observacao") or "Sem observação cadastrada").strip()
 
 
-def diagnosticar_imposto_na_diferenca(diferenca, impostos):
+def montar_diagnostico(titulo, *linhas):
+    detalhes = [str(linha).strip() for linha in linhas if str(linha or "").strip()]
+    if detalhes:
+        return f"{titulo}\n" + "\n".join(detalhes)
+    return titulo
+
+
+def diagnosticar_imposto_na_diferenca(diferenca_assinada, impostos):
+    diferenca = abs(diferenca_assinada)
+    mensagens_impostos = {
+        "IPI": "IPI NÃO FOI ESPECIFICADO NO PEDIDO",
+        "ICMS": "ICMS DIVERGENTE NO PEDIDO",
+        "PIS": "PIS DIVERGENTE NO PEDIDO",
+        "COFINS": "COFINS DIVERGENTE NO PEDIDO",
+        "PIS/COFINS Total": "PIS/COFINS DIVERGENTE NO PEDIDO",
+    }
+
     for nome, valor in impostos:
-        if valor and abs(abs(diferenca) - abs(valor)) <= TOLERANCIA_IMPOSTO:
-            return (
-                f"A diferença encontrada corresponde aproximadamente ao valor do {nome}, "
-                "indicando que este imposto pode não estar discriminado no pedido KSB."
+        if valor and abs(diferenca - abs(valor)) <= TOLERANCIA_IMPOSTO:
+            return montar_diagnostico(
+                mensagens_impostos.get(nome, f"{nome} DIVERGENTE NO PEDIDO"),
+                f"A diferença de {formatar_moeda_texto(diferenca)} corresponde aproximadamente ao {nome.replace(' Total', '')} calculado.",
             )
 
-    return "Valor do pedido diverge do valor calculado com base líquida, divisor fiscal e IPI da regra fiscal."
+    if diferenca_assinada > 0:
+        return montar_diagnostico(
+            "VALOR DO PEDIDO MENOR QUE O CALCULADO",
+            f"Diferença: {formatar_moeda_texto(diferenca)}. Verificar imposto não especificado ou valor incorreto.",
+        )
+
+    return montar_diagnostico(
+        "VALOR DO PEDIDO MAIOR QUE O CALCULADO",
+        f"Diferença: {formatar_moeda_texto(diferenca)}. Verificar valor lançado no pedido.",
+    )
 
 
 # ====================================
@@ -359,7 +384,10 @@ def processar_pdf(PDF_PATH):
                 f"Material KSB não cadastrado na lista de materiais: {codigo_material}"
             )
             diagnosticos.append(
-                "Material não encontrado no cadastro. Cadastre o material para validar NCM, impostos e valores."
+                montar_diagnostico(
+                    "MATERIAL SEM CADASTRO",
+                    f"Cadastre o material {codigo_material} para validar NCM, impostos e preço.",
+                )
             )
 
         else:
@@ -370,7 +398,10 @@ def processar_pdf(PDF_PATH):
                     f"Material KSB {codigo_material} cadastrado sem NCM"
                 )
                 diagnosticos.append(
-                    "Material cadastrado sem NCM. Informe o NCM no cadastro do material para concluir a auditoria."
+                    montar_diagnostico(
+                        "NCM NÃO CADASTRADO NO MATERIAL",
+                        f"Informe o NCM no cadastro do material {codigo_material}.",
+                    )
                 )
 
             else:
@@ -385,10 +416,11 @@ def processar_pdf(PDF_PATH):
                         f"NCM divergente (Cadastro: {ncm_cadastrado} | Pedido KSB: {ncm})"
                     )
                     diagnosticos.append(
-                        f"NCM do pedido: {ncm} - {observacao_ncm_pedido}"
-                    )
-                    diagnosticos.append(
-                        f"NCM correto: {ncm_cadastrado} - {observacao_ncm_cadastro}"
+                        montar_diagnostico(
+                            "NCM DIVERGENTE",
+                            f"Pedido: {ncm} - {observacao_ncm_pedido}",
+                            f"Correto: {ncm_cadastrado} - {observacao_ncm_cadastro}",
+                        )
                     )
 
                 if not regra_fiscal:
@@ -396,7 +428,10 @@ def processar_pdf(PDF_PATH):
                         f"Nenhuma regra fiscal encontrada para o NCM cadastrado: {ncm_cadastrado}"
                     )
                     diagnosticos.append(
-                        "Regra fiscal não localizada para o NCM correto do cadastro. Cadastre a regra fiscal para validar os impostos."
+                        montar_diagnostico(
+                            "REGRA FISCAL NÃO CADASTRADA",
+                            f"Cadastre a regra fiscal para o NCM {ncm_cadastrado}.",
+                        )
                     )
 
                 else:
@@ -431,7 +466,7 @@ def processar_pdf(PDF_PATH):
             )
             diagnosticos.append(
                 diagnosticar_imposto_na_diferenca(
-                    diferenca,
+                    diferenca_assinada,
                     [
                         ("ICMS", valor_icms),
                         ("PIS", valor_pis),
@@ -443,7 +478,7 @@ def processar_pdf(PDF_PATH):
             )
 
         if not diagnosticos:
-            diagnosticos.append("Item sem divergências identificadas.")
+            diagnosticos.append(montar_diagnostico("ANÁLISE FISCAL OK", "Nenhuma divergência fiscal identificada."))
 
         # ====================================
         # ANALISE COMERCIAL
@@ -458,7 +493,10 @@ def processar_pdf(PDF_PATH):
 
         if not material_cadastrado:
             status_comercial = "PENDENTE - MATERIAL SEM CADASTRO"
-            diagnostico_comercial = "Material não cadastrado. Cadastre o material para validar preço e revisão comercial."
+            diagnostico_comercial = montar_diagnostico(
+                "MATERIAL SEM CADASTRO",
+                f"Cadastre o material {codigo_material} para validar NCM, impostos e preço.",
+            )
         else:
             preco_cadastrado = numero_para_float(material_cadastrado.get("preco_unitario_liquido"))
             data_ultima_revisao_preco = str(material_cadastrado.get("data_ultima_revisao") or "")
@@ -468,20 +506,24 @@ def processar_pdf(PDF_PATH):
 
             if preco_cadastrado <= 0:
                 status_comercial = "PENDENTE - PREÇO NÃO CADASTRADO"
-                diagnostico_comercial = "Material cadastrado sem preço unitário líquido. Informe o preço cadastrado para concluir a análise comercial."
+                diagnostico_comercial = montar_diagnostico(
+                    "PREÇO NÃO CADASTRADO",
+                    f"Informe o Preço Unitário Líquido no cadastro do material {codigo_material}.",
+                )
             elif abs(diferenca_preco) > 0.01:
                 status_comercial = "PENDENTE - REVISÃO DE PREÇO"
-                diagnostico_comercial = (
-                    f"Preço do pedido KSB: {formatar_moeda_texto(preco_pedido_ksb)} | "
-                    f"Preço cadastrado: {formatar_moeda_texto(preco_cadastrado)} | "
-                    f"Diferença: {formatar_moeda_texto(diferenca_preco)} | "
-                    f"Última revisão: {data_ultima_revisao_preco or '-'} | "
-                    f"Revisado por: {usuario_ultima_revisao_preco or '-'}. "
-                    "Necessário revisar preço cadastrado ou negociar pedido."
+                diagnostico_comercial = montar_diagnostico(
+                    "PREÇO DIVERGENTE",
+                    f"Pedido KSB: {formatar_moeda_texto(preco_pedido_ksb)} | Cadastrado: {formatar_moeda_texto(preco_cadastrado)} | Diferença: {formatar_moeda_texto(diferenca_preco)}.",
+                    f"Última revisão: {data_ultima_revisao_preco or '-'} | Revisado por: {usuario_ultima_revisao_preco or '-'}.",
+                    "Necessário revisar preço cadastrado ou negociar o pedido.",
                 )
             else:
                 status_comercial = "OK"
-                diagnostico_comercial = "Preço líquido unitário do pedido KSB igual ao preço cadastrado."
+                diagnostico_comercial = montar_diagnostico(
+                    "PREÇO OK",
+                    "Preço líquido unitário do pedido está igual ao cadastrado.",
+                )
 
         # ====================================
         # LEADTIME
@@ -496,6 +538,23 @@ def processar_pdf(PDF_PATH):
 
         except:
             leadtime = "Erro"
+
+        diagnosticos_comerciais = [diagnostico_comercial]
+        if leadtime == "Erro":
+            diagnosticos_comerciais.append(
+                montar_diagnostico(
+                    "DATA DE ENTREGA INVÁLIDA",
+                    "Não foi possível calcular o leadtime.",
+                )
+            )
+        elif leadtime < 0:
+            diagnosticos_comerciais.append(
+                montar_diagnostico(
+                    "PRAZO DE ENTREGA VENCIDO",
+                    "Data de entrega anterior à data da análise.",
+                )
+            )
+        diagnostico_comercial = "\n\n".join(diagnosticos_comerciais)
 
         # ====================================
         # STATUS FINAL
@@ -543,8 +602,8 @@ def processar_pdf(PDF_PATH):
                 "Valor Pedido": valor_total_float,
                 "Valor Calculado": valor_calculado if regra_fiscal else "",
                 "Diferença": diferenca_assinada if regra_fiscal else "",
-                "Diagnóstico": " | ".join(diagnosticos),
-                "Divergencias": (" | ".join(divergencias) if divergencias else "-"),
+                "Diagnóstico": "\n\n".join(diagnosticos),
+                "Divergencias": ("\n".join(divergencias) if divergencias else "-"),
                 "Status Comercial": status_comercial,
                 "Preço Pedido KSB": preco_pedido_ksb,
                 "Preço Cadastrado": preco_cadastrado if material_cadastrado else "",

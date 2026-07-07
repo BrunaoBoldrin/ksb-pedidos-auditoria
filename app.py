@@ -55,6 +55,10 @@ def valor_texto(linha, coluna, padrao="-"):
     return str(valor)
 
 
+def formatar_diagnostico_markdown(diagnostico):
+    return valor_texto({"Diagnóstico": diagnostico}, "Diagnóstico").replace("\n", "  \n")
+
+
 def texto_pdf(valor):
     return escape(str(valor_texto({"v": valor}, "v")))
 
@@ -118,7 +122,7 @@ def gerar_pdf_auditoria(df_analise, codigo_pedido=None):
             [
                 texto_pdf(rotulo),
                 Paragraph(
-                    texto_pdf(valor).replace(" | ", "<br/>") if rotulo in campos_longos else texto_pdf(valor),
+                    texto_pdf(valor).replace("\n", "<br/>").replace(" | ", "<br/>") if rotulo in campos_longos else texto_pdf(valor),
                     styles["BodyText"],
                 ),
             ]
@@ -170,7 +174,7 @@ def gerar_pdf_comercial(df_analise):
             [
                 texto_pdf(rotulo),
                 Paragraph(
-                    texto_pdf(valor).replace(" | ", "<br/>") if rotulo in campos_longos else texto_pdf(valor),
+                    texto_pdf(valor).replace("\n", "<br/>").replace(" | ", "<br/>") if rotulo in campos_longos else texto_pdf(valor),
                     styles["BodyText"],
                 ),
             ]
@@ -224,7 +228,7 @@ def garantir_preco_cadastrado_com_imposto(df_analise_final):
 
 
 def exibir_diagnostico_fiscal(linha, status_fiscal):
-    diagnostico = valor_texto(linha, "Diagnóstico")
+    diagnostico = formatar_diagnostico_markdown(linha.get("Diagnóstico"))
     if status_fiscal == "OK":
         st.success(f"**📋 Diagnóstico Fiscal**  \n{diagnostico}")
     else:
@@ -232,7 +236,7 @@ def exibir_diagnostico_fiscal(linha, status_fiscal):
 
 
 def exibir_diagnostico_comercial(linha, status_comercial):
-    diagnostico = valor_texto(linha, "Diagnóstico Comercial")
+    diagnostico = formatar_diagnostico_markdown(linha.get("Diagnóstico Comercial"))
     if status_comercial == "OK":
         st.success(f"**💼 Diagnóstico Comercial**  \n{diagnostico}")
     elif "PENDENTE" in status_comercial:
@@ -376,7 +380,7 @@ def exibir_cards_comercial(df_analise_final):
             l2.write(f"**Última Revisão Preço:** {valor_texto(linha, 'Data Última Revisão Preço')}")
             l3.write(f"**Usuário Última Revisão Preço:** {valor_texto(linha, 'Usuário Última Revisão Preço')}")
 
-            diagnostico = valor_texto(linha, "Diagnóstico Comercial")
+            diagnostico = formatar_diagnostico_markdown(linha.get("Diagnóstico Comercial"))
             if status == "OK":
                 st.success(f"**Diagnóstico Comercial:** {diagnostico}")
             elif status == "PENDENTE - REVISÃO DE PREÇO":
