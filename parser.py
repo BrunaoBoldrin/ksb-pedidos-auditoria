@@ -10,7 +10,9 @@ from datetime import datetime
 # ====================================
 
 
-PIS_COFINS_PERCENTUAL = 0.0925
+PIS_PERCENTUAL = 0.0165
+COFINS_PERCENTUAL = 0.076
+PIS_COFINS_PERCENTUAL = PIS_PERCENTUAL + COFINS_PERCENTUAL
 TOLERANCIA_IMPOSTO = 1.00
 
 
@@ -414,7 +416,10 @@ def processar_pdf(PDF_PATH):
         divisor_base = calcular_divisor_base(icms_regra)
         valor_base = round((valor_unitario_float / divisor_base) * quantidade_float, 2) if regra_fiscal else 0.0
         valor_icms = round(valor_base * aliquota_icms, 2)
-        valor_pis_cofins = round(valor_base * PIS_COFINS_PERCENTUAL, 2)
+        valor_base_pis_cofins = round(valor_base - valor_icms, 2)
+        valor_pis = round(valor_base_pis_cofins * PIS_PERCENTUAL, 2)
+        valor_cofins = round(valor_base_pis_cofins * COFINS_PERCENTUAL, 2)
+        valor_pis_cofins = round(valor_pis + valor_cofins, 2)
         valor_ipi = round(valor_base * aliquota_ipi, 2)
         valor_calculado = round(valor_base + valor_ipi, 2) if regra_fiscal else 0.0
         diferenca_assinada = round(valor_calculado - valor_total_float, 2) if regra_fiscal else 0.0
@@ -429,7 +434,9 @@ def processar_pdf(PDF_PATH):
                     diferenca,
                     [
                         ("ICMS", valor_icms),
-                        ("PIS/COFINS", valor_pis_cofins),
+                        ("PIS", valor_pis),
+                        ("COFINS", valor_cofins),
+                        ("PIS/COFINS Total", valor_pis_cofins),
                         ("IPI", valor_ipi),
                     ],
                 )
@@ -521,11 +528,16 @@ def processar_pdf(PDF_PATH):
                 "NCM Cadastro": ncm_cadastrado,
                 "Descrição NCM Cadastro": descricao_ncm_cadastro if ncm_divergente else "",
                 "ICMS Regra": icms_regra if icms_regra is not None else "",
+                "PIS Regra": "1,65%",
+                "COFINS Regra": "7,60%",
                 "PIS/COFINS Regra": "9,25%",
                 "IPI Regra": ipi_regra if ipi_regra is not None else "",
                 "Valor Unitário Líquido": valor_unitario_float,
                 "Valor Base": valor_base,
                 "Valor ICMS": valor_icms,
+                "Base PIS/COFINS": valor_base_pis_cofins,
+                "Valor PIS": valor_pis,
+                "Valor COFINS": valor_cofins,
                 "Valor PIS/COFINS": valor_pis_cofins,
                 "Valor IPI": valor_ipi,
                 "Valor Pedido": valor_total_float,
@@ -571,6 +583,13 @@ def processar_pdf(PDF_PATH):
                 "IPI Regra": ipi_regra if ipi_regra is not None else "",
                 "Valor Unitario": valor_unitario,
                 "Valor Total": valor_total,
+                "Valor Base": valor_base,
+                "Valor ICMS": valor_icms,
+                "Base PIS/COFINS": valor_base_pis_cofins,
+                "Valor PIS": valor_pis,
+                "Valor COFINS": valor_cofins,
+                "Valor PIS/COFINS": valor_pis_cofins,
+                "Valor IPI": valor_ipi,
                 "Valor Calculado": valor_calculado if regra_fiscal else "",
             }
         )
