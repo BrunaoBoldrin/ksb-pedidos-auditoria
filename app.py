@@ -279,7 +279,7 @@ def exibir_cards_auditoria(df_analise_final):
             exibir_diagnostico_fiscal(linha, status_fiscal)
             exibir_diagnostico_comercial(linha, status_comercial)
 
-            with st.expander("▶ Ver detalhes da auditoria fiscal"):
+            with st.expander("Ver detalhes da auditoria fiscal"):
                 f1, f2, f3 = st.columns(3)
                 f1.write(f"**NCM Pedido KSB:** {valor_texto(linha, 'NCM Pedido KSB')}")
                 f1.write(f"**NCM Cadastro:** {valor_texto(linha, 'NCM Cadastro')}")
@@ -298,7 +298,7 @@ def exibir_cards_auditoria(df_analise_final):
                 if diferenca_monetaria_relevante(linha.get("Diferença")):
                     st.metric("Diferença Fiscal", formatar_moeda(linha.get("Diferença")))
 
-            with st.expander("▶ Ver detalhes da análise comercial"):
+            with st.expander("Ver detalhes da análise comercial"):
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Preço Unitário Líquido KSB", formatar_moeda(linha.get("Preço Pedido KSB")))
                 c2.metric("Preço Unitário Líquido Cadastrado", formatar_moeda(linha.get("Preço Cadastrado")))
