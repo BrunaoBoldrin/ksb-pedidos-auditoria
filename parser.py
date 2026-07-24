@@ -15,6 +15,14 @@ COFINS_PERCENTUAL = 0.076
 PIS_COFINS_PERCENTUAL = PIS_PERCENTUAL + COFINS_PERCENTUAL
 TOLERANCIA_IMPOSTO = 1.00
 
+# O item do pedido KSB sempre ocupa cinco dígitos, mas não necessariamente
+# segue a sequência 00010, 00020, 00030. Pedidos também podem trazer itens
+# como 00100, 00110 e 00120.
+PADRAO_CABECALHO_ITEM = re.compile(
+    r"^\s*(?P<item>\d{5})\s+(?P<codigo_material>\d{8})(?=\s|$)",
+    re.MULTILINE,
+)
+
 
 def moeda_para_float(valor):
     valor = str(valor)
@@ -204,9 +212,7 @@ def processar_pdf(PDF_PATH):
     # ITENS
     # ====================================
 
-    matches = list(
-        re.finditer(r"^\s*(000\d{2})\s+(\d{8})", texto_completo, re.MULTILINE)
-    )
+    matches = list(PADRAO_CABECALHO_ITEM.finditer(texto_completo))
 
     # ====================================
     # LOOP ITENS
@@ -229,17 +235,13 @@ def processar_pdf(PDF_PATH):
         # ITEM
         # ====================================
 
-        item_match = re.search(r"(000\d{2})", bloco)
-
-        item = item_match.group(1) if item_match else ""
+        item = matches[i].group("item")
 
         # ====================================
         # CODIGO MATERIAL
         # ====================================
 
-        codigo_match = re.search(r"000\d{2}\s+(\d{8})", bloco)
-
-        codigo_material = codigo_match.group(1) if codigo_match else ""
+        codigo_material = matches[i].group("codigo_material")
 
         # ====================================
         # DATA ENTREGA
@@ -274,7 +276,7 @@ def processar_pdf(PDF_PATH):
         descricao = ""
 
         for idx, linha in enumerate(linhas):
-            if re.search(r"000\d{2}", linha):
+            if PADRAO_CABECALHO_ITEM.match(linha):
                 if idx + 1 < len(linhas):
                     descricao = linhas[idx + 1].strip()
 
@@ -341,7 +343,7 @@ def processar_pdf(PDF_PATH):
         linha_item = ""
 
         for linha in linhas:
-            if re.search(r"000\d{2}", linha):
+            if PADRAO_CABECALHO_ITEM.match(linha):
                 linha_item = linha
 
                 break
