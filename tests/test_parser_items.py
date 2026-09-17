@@ -43,6 +43,31 @@ NCM: 7419.80.90
 
 
 class TestIdentificacaoItens(unittest.TestCase):
+    def test_codigos_alfanumericos_entram_na_extracao_e_diagnostico(self):
+        codigos = ["02154693", "WGS-5520", "AB1234", "wgs-5520"]
+        itens = ["00010", "00100", "00110", "00120"]
+        texto = "Pedido 4508000000\nData 30.06.2026\n" + "".join(
+            bloco_item(item, codigo, f"DESCRICAO {codigo}", f"{i * 100},00")
+            for i, (item, codigo) in enumerate(zip(itens, codigos), 1)
+        )
+        with patch.object(parser.pdfplumber, "open", return_value=PdfFalso(texto)), patch.object(
+            parser, "buscar_material_por_codigo", return_value=None
+        ) as buscar:
+            dados, analises = parser.processar_pdf("pedido.pdf")
+
+        self.assertEqual(dados["Item"].tolist(), itens)
+        self.assertEqual(dados["Codigo Material"].tolist(), codigos)
+        self.assertEqual(analises["Código Material"].tolist(), codigos)
+        self.assertEqual(dados["Descricao"].tolist(), [f"DESCRICAO {c}" for c in codigos])
+        self.assertEqual(dados["Valor Total"].tolist(), ["100,00", "200,00", "300,00", "400,00"])
+        self.assertEqual(dados["Quantidade"].tolist(), ["1"] * 4)
+        self.assertEqual(dados["Data Entrega"].tolist(), ["25.09.2026"] * 4)
+        self.assertEqual([chamada.args[0] for chamada in buscar.call_args_list], codigos)
+
+    def test_cabecalho_nao_usa_a_proxima_linha_como_codigo(self):
+        self.assertIsNone(parser.PADRAO_CABECALHO_ITEM.search("00010\nWGS-5520"))
+        self.assertIsNone(parser.PADRAO_CABECALHO_ITEM.search("00010 WGS-5520!"))
+
     def processar_texto(self, texto):
         with patch.object(parser.pdfplumber, "open", return_value=PdfFalso(texto)):
             dados, _ = parser.processar_pdf("pedido.pdf")
