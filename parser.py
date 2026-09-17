@@ -18,8 +18,11 @@ TOLERANCIA_IMPOSTO = 1.00
 # O item do pedido KSB sempre ocupa cinco dígitos, mas não necessariamente
 # segue a sequência 00010, 00020, 00030. Pedidos também podem trazer itens
 # como 00100, 00110 e 00120.
+# O código do material é textual: pode ser numérico (02154693) ou
+# alfanumérico, com hífen (WGS-5520). Preserve o código completo.
 PADRAO_CABECALHO_ITEM = re.compile(
-    r"^\s*(?P<item>\d{5})\s+(?P<codigo_material>\d{8})(?=\s|$)",
+    r"^[ \t]*(?P<item>\d{5})[ \t]+"
+    r"(?P<codigo_material>[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)(?=[ \t]|$)",
     re.MULTILINE,
 )
 
