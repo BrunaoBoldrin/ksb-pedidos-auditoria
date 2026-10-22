@@ -2,8 +2,12 @@
 
 import os
 from contextlib import contextmanager
+from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 import psycopg2
+
+from audit_rules import summarize_item_statuses
 
 _REQUIRED_ENV_VARS = ("DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD")
 
@@ -19,6 +23,29 @@ def _limpar_texto(valor):
 
 def _limpar_codigo(codigo):
     return _limpar_texto(codigo)
+
+
+def _decimal_centavos(valor):
+    try:
+        return Decimal(str(valor)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal("0.00")
+
+
+def _numero_ou_none(valor):
+    if valor in (None, ""):
+        return None
+    try:
+        return float(str(valor).replace(".", "").replace(",", ".")) if "," in str(valor) else float(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _inteiro_ou_none(valor):
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return None
 
 
 def _get_db_config():
@@ -174,6 +201,22 @@ def inicializar_banco():
             )
             """
         )
+        cursor.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS usuario_auditoria TEXT")
+        cursor.execute(
+            "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS tipo_execucao TEXT DEFAULT 'PRIMEIRA ANÁLISE'"
+        )
+        cursor.execute(
+            "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS confirmou_auditoria BOOLEAN DEFAULT FALSE"
+        )
+        cursor.execute(
+            "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS confirmou_implantacao BOOLEAN DEFAULT FALSE"
+        )
+        cursor.execute(
+            "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pedidos_numero_status ON pedidos (numero_pedido, status_etapa1, status_etapa2)"
+        )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS pedido_itens (
@@ -207,6 +250,20 @@ def inicializar_banco():
                 preco_revisado DOUBLE PRECISION,
                 preco_pdf DOUBLE PRECISION,
                 diferenca DOUBLE PRECISION
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS revisoes_preco (
+                id SERIAL PRIMARY KEY,
+                codigo_material TEXT NOT NULL,
+                descricao_material TEXT,
+                preco_anterior NUMERIC(15, 2) NOT NULL,
+                preco_novo NUMERIC(15, 2) NOT NULL,
+                usuario TEXT,
+                origem TEXT NOT NULL,
+                criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -324,6 +381,7 @@ def atualizar_material(
     preco_revisado,
     data_ultima_revisao,
     usuario_ultima_revisao_preco=None,
+    origem_alteracao="ALTERAÇÃO PELO SISTEMA",
 ):
     codigo_material = _limpar_codigo(codigo_material)
     descricao = _limpar_texto(descricao)
@@ -335,8 +393,19 @@ def atualizar_material(
     codigo_interno_varzea = _limpar_texto(codigo_interno_varzea)
     data_ultima_revisao = _limpar_texto(data_ultima_revisao)
     usuario_ultima_revisao_preco = _limpar_texto(usuario_ultima_revisao_preco)
+    origem_alteracao = _limpar_texto(origem_alteracao) or "ALTERAÇÃO PELO SISTEMA"
 
     with _cursor(commit=True) as cursor:
+        cursor.execute(
+            """
+            SELECT descricao, preco_revisado
+            FROM materiais
+            WHERE BTRIM(codigo_material) = %s
+            FOR UPDATE
+            """,
+            (codigo_material,),
+        )
+        material_anterior = cursor.fetchone()
         cursor.execute(
             """
             UPDATE materiais
@@ -390,6 +459,28 @@ def atualizar_material(
                     usuario_ultima_revisao_preco,
                 ),
             )
+        elif material_anterior is not None and preco_revisado is not None:
+            descricao_anterior, preco_anterior = material_anterior
+            preco_anterior_centavos = _decimal_centavos(preco_anterior)
+            preco_novo_centavos = _decimal_centavos(preco_revisado)
+            if preco_anterior_centavos != preco_novo_centavos:
+                cursor.execute(
+                    """
+                    INSERT INTO revisoes_preco (
+                        codigo_material, descricao_material, preco_anterior,
+                        preco_novo, usuario, origem
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s)
+                    """,
+                    (
+                        codigo_material,
+                        descricao or _limpar_texto(descricao_anterior),
+                        preco_anterior_centavos,
+                        preco_novo_centavos,
+                        usuario_ultima_revisao_preco,
+                        origem_alteracao,
+                    ),
+                )
 
 
 def inserir_material(
@@ -424,6 +515,149 @@ def excluir_material(codigo_material):
     codigo_material = _limpar_codigo(codigo_material)
     with _cursor(commit=True) as cursor:
         cursor.execute("DELETE FROM materiais WHERE BTRIM(codigo_material) = %s", (codigo_material,))
+
+
+def pedido_ja_aprovado(numero_pedido):
+    numero_pedido = _limpar_texto(numero_pedido)
+    if not numero_pedido:
+        return False
+    with _cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pedidos
+                WHERE numero_pedido = %s
+                  AND status_etapa1 = 'OK'
+                  AND status_etapa2 = 'OK'
+            )
+            """,
+            (numero_pedido,),
+        )
+        resultado = cursor.fetchone()
+    return bool(resultado and resultado[0])
+
+
+def registrar_auditoria_pedido(
+    dados_pedido,
+    itens,
+    usuario,
+    reavaliacao,
+    confirmou_auditoria,
+    confirmou_implantacao,
+    arquivo_pdf,
+):
+    itens = list(itens or [])
+    status_fiscal, status_comercial = summarize_item_statuses(itens)
+    numero_pedido = _limpar_texto(dados_pedido.get("Pedido") or dados_pedido.get("Numero Pedido"))
+    agora = datetime.now().isoformat(timespec="seconds")
+
+    with _cursor(commit=True) as cursor:
+        cursor.execute(
+            """
+            INSERT INTO pedidos (
+                numero_pedido, data_emissao, comprador, unidade, data_upload,
+                arquivo_pdf, status_etapa1, status_etapa2, usuario_auditoria,
+                tipo_execucao, confirmou_auditoria, confirmou_implantacao
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id
+            """,
+            (
+                numero_pedido,
+                _limpar_texto(dados_pedido.get("Data Emissão")),
+                _limpar_texto(dados_pedido.get("Comprador")),
+                _limpar_texto(dados_pedido.get("Unidade Pedido")),
+                agora,
+                _limpar_texto(arquivo_pdf),
+                status_fiscal,
+                status_comercial,
+                _limpar_texto(usuario),
+                "REAVALIAÇÃO" if reavaliacao else "PRIMEIRA ANÁLISE",
+                bool(confirmou_auditoria),
+                bool(confirmou_implantacao),
+            ),
+        )
+        pedido_id = cursor.fetchone()[0]
+
+        for item in itens:
+            codigo_material = item.get("Código Material") or item.get("Codigo Material")
+            cursor.execute(
+                """
+                INSERT INTO pedido_itens (
+                    pedido_id, item_pedido, codigo_material, descricao, quantidade,
+                    unidade_medida, data_entrega, valor_unitario_pdf, valor_total_pdf,
+                    material, norma, ncm, leadtime
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id
+                """,
+                (
+                    pedido_id,
+                    _limpar_texto(item.get("Item")),
+                    _limpar_texto(codigo_material),
+                    _limpar_texto(item.get("Descrição") or item.get("Descricao")),
+                    _numero_ou_none(item.get("Quantidade")),
+                    _limpar_texto(item.get("Unidade") or item.get("Unidade Item")),
+                    _limpar_texto(item.get("Data Entrega")),
+                    _numero_ou_none(item.get("Preço Pedido KSB") or item.get("Valor Unitario")),
+                    _numero_ou_none(item.get("Valor Pedido") or item.get("Valor Total")),
+                    _limpar_texto(item.get("Material")),
+                    _limpar_texto(item.get("Norma")),
+                    _limpar_texto(item.get("NCM Pedido KSB")),
+                    _inteiro_ou_none(item.get("Leadtime Dias") or item.get("Leadtime")),
+                ),
+            )
+            pedido_item_id = cursor.fetchone()[0]
+            cursor.execute(
+                """
+                INSERT INTO auditorias (
+                    pedido_item_id, data_auditoria, etapa1_status, etapa1_detalhes,
+                    etapa2_status, etapa2_detalhes, preco_revisado, preco_pdf, diferenca
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    pedido_item_id,
+                    agora,
+                    _limpar_texto(item.get("Status")),
+                    _limpar_texto(item.get("Diagnóstico")),
+                    _limpar_texto(item.get("Status Comercial")),
+                    _limpar_texto(item.get("Diagnóstico Comercial")),
+                    _numero_ou_none(item.get("Preço Cadastrado")),
+                    _numero_ou_none(item.get("Preço Pedido KSB")),
+                    _numero_ou_none(item.get("Diferença Preço")),
+                ),
+            )
+
+    return pedido_id
+
+
+def listar_logs_auditorias():
+    with _cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT numero_pedido, tipo_execucao, status_etapa1, status_etapa2,
+                   usuario_auditoria, criado_em, confirmou_auditoria,
+                   confirmou_implantacao, arquivo_pdf
+            FROM pedidos
+            ORDER BY criado_em DESC, id DESC
+            """
+        )
+        return cursor.fetchall()
+
+
+def listar_logs_revisoes_preco():
+    with _cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT codigo_material, descricao_material, preco_anterior, preco_novo,
+                   usuario, criado_em, origem
+            FROM revisoes_preco
+            ORDER BY criado_em DESC, id DESC
+            """
+        )
+        return cursor.fetchall()
 
 
 def criar_tabela_regras_fiscais():

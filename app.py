@@ -22,11 +22,22 @@ from database import (
     inserir_material,
     inserir_regra_fiscal,
     inserir_usuario,
+    listar_logs_auditorias,
+    listar_logs_revisoes_preco,
     listar_materiais_completo,
     listar_regras_fiscais,
     listar_usuarios,
+    pedido_ja_aprovado,
+    registrar_auditoria_pedido,
 )
-from parser import calcular_divisor_base, processar_pdf
+from order_workflow import approved_orders_in_batch, process_uploaded_orders, upload_fingerprints
+from parser import calcular_divisor_base, extract_order_number, processar_pdf
+from ui_rules import (
+    build_outdated_prices_table,
+    filter_audit_log,
+    filter_price_log,
+    menu_options_for_profile,
+)
 
 st.set_page_config(page_title="Analisador de Pedidos", page_icon="📄", layout="wide")
 
@@ -479,6 +490,71 @@ def preparar_planilha_materiais(arquivo_excel):
     return final, relatorio_abas
 
 
+def salvar_uploads(uploaded_files):
+    for arquivo in uploaded_files:
+        with open(arquivo.name, "wb") as destino:
+            destino.write(arquivo.getbuffer())
+
+
+def exibir_resultados_processamento(resultados):
+    todos_dados = [dados for dados, _ in resultados]
+    todas_analises = [analise for _, analise in resultados]
+    df_final = pd.concat(todos_dados, ignore_index=True)
+    df_analise_final = pd.concat(todas_analises, ignore_index=True)
+    df_analise_final = garantir_preco_cadastrado_com_imposto(df_analise_final)
+    exibir_cards_auditoria(df_analise_final)
+    nome_pdf_fiscal = titulo_avaliacao_pedidos(df_analise_final, "Fiscal")
+    nome_pdf_comercial = titulo_avaliacao_pedidos(df_analise_final, "Comercial")
+    col_pdf_fiscal, col_pdf_comercial = st.columns(2)
+    col_pdf_fiscal.download_button(
+        "📄 Baixar PDF Auditoria Fiscal",
+        gerar_pdf_auditoria(df_analise_final),
+        f"{nome_pdf_fiscal}.pdf",
+        "application/pdf",
+    )
+    col_pdf_comercial.download_button(
+        "📄 Baixar PDF Análise Comercial",
+        gerar_pdf_comercial(df_analise_final),
+        f"{nome_pdf_comercial}.pdf",
+        "application/pdf",
+    )
+    st.divider()
+    st.subheader("📦 Dados Extraídos")
+    st.dataframe(df_final, use_container_width=True)
+    st.download_button(
+        "📥 Download CSV",
+        df_final.to_csv(index=False, sep=";").encode("utf-8-sig"),
+        "pedidos_extraidos.csv",
+        "text/csv",
+    )
+    excel_buffer = BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        df_final.to_excel(writer, index=False, sheet_name="Pedidos")
+        df_analise_final.to_excel(writer, index=False, sheet_name="Auditoria")
+    st.download_button(
+        "📥 Download Excel",
+        excel_buffer.getvalue(),
+        "pedidos_extraidos.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    st.success("Processamento concluído com sucesso!")
+
+
+def executar_processamento(uploaded_files, pedidos_reavaliados, confirmacoes, usuario):
+    progresso = st.progress(0)
+    with st.spinner("Processando PDFs..."):
+        resultados = process_uploaded_orders(
+            uploaded_files,
+            usuario,
+            pedidos_reavaliados,
+            confirmacoes,
+            processar_pdf,
+            registrar_auditoria_pedido,
+        )
+    progresso.progress(100)
+    exibir_resultados_processamento(resultados)
+
+
 for chave in ["usuario_logado", "nome_usuario", "perfil_usuario"]:
     if chave not in st.session_state:
         st.session_state[chave] = None
@@ -510,14 +586,7 @@ with st.sidebar:
         st.session_state.perfil_usuario = None
         st.rerun()
 
-if perfil == "ADMIN":
-    opcoes_menu = ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados", "🏛 Regras Fiscais", "📋 Histórico de Auditorias", "👤 Usuários", "🛠️ Ferramentas Administrativas"]
-elif perfil == "VENDEDORA":
-    opcoes_menu = ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados", "📋 Histórico de Auditorias"]
-elif perfil == "PROCESSISTA":
-    opcoes_menu = ["📦 Itens Cadastrados"]
-else:
-    opcoes_menu = ["📄 Análise de Pedidos KSB"]
+opcoes_menu = menu_options_for_profile(perfil)
 
 menu = st.sidebar.radio("Menu", opcoes_menu)
 pode_editar_materiais = perfil in ["ADMIN", "PROCESSISTA"]
@@ -529,51 +598,72 @@ if menu == "📄 Análise de Pedidos KSB":
 
     if uploaded_files:
         st.success(f"{len(uploaded_files)} PDF(s) carregado(s)")
-        if st.button("🚀 PROCESSAR PEDIDOS"):
-            todos_dados = []
-            todas_analises = []
-            progress = st.progress(0)
-            with st.spinner("Processando PDFs..."):
-                for idx, arquivo in enumerate(uploaded_files):
-                    with open(arquivo.name, "wb") as f:
-                        f.write(arquivo.getbuffer())
-                    df_dados, df_analise = processar_pdf(arquivo.name)
-                    todos_dados.append(df_dados)
-                    todas_analises.append(df_analise)
-                    progress.progress(int(((idx + 1) / len(uploaded_files)) * 100))
+        for chave, valor in [
+            ("pedidos_reavaliacao_pendentes", []),
+            ("arquivos_reavaliacao_pendentes", []),
+        ]:
+            if chave not in st.session_state:
+                st.session_state[chave] = valor
 
-            df_final = pd.concat(todos_dados, ignore_index=True)
-            df_analise_final = pd.concat(todas_analises, ignore_index=True)
-            df_analise_final = garantir_preco_cadastrado_com_imposto(df_analise_final)
-            exibir_cards_auditoria(df_analise_final)
-            nome_pdf_fiscal = titulo_avaliacao_pedidos(df_analise_final, "Fiscal")
-            nome_pdf_comercial = titulo_avaliacao_pedidos(df_analise_final, "Comercial")
-            pdf_fiscal_bytes = gerar_pdf_auditoria(df_analise_final)
-            pdf_comercial_bytes = gerar_pdf_comercial(df_analise_final)
-            col_pdf_fiscal, col_pdf_comercial = st.columns(2)
-            col_pdf_fiscal.download_button(
-                "📄 Baixar PDF Auditoria Fiscal",
-                pdf_fiscal_bytes,
-                f"{nome_pdf_fiscal}.pdf",
-                "application/pdf",
+        assinaturas_arquivos = upload_fingerprints(uploaded_files)
+        if (
+            st.session_state.arquivos_reavaliacao_pendentes
+            and st.session_state.arquivos_reavaliacao_pendentes != assinaturas_arquivos
+        ):
+            st.session_state.pedidos_reavaliacao_pendentes = []
+            st.session_state.arquivos_reavaliacao_pendentes = []
+
+        pedidos_pendentes = st.session_state.pedidos_reavaliacao_pendentes
+        if pedidos_pendentes:
+            st.warning(
+                "Os pedidos abaixo já foram aprovados nas avaliações fiscal e comercial: "
+                + ", ".join(pedidos_pendentes)
             )
-            col_pdf_comercial.download_button(
-                "📄 Baixar PDF Análise Comercial",
-                pdf_comercial_bytes,
-                f"{nome_pdf_comercial}.pdf",
-                "application/pdf",
+            confirmou_auditoria = st.checkbox(
+                "Estou ciente de que este pedido já foi auditado e desejo reavaliá-lo."
             )
-            st.divider()
-            st.subheader("📦 Dados Extraídos")
-            st.dataframe(df_final, use_container_width=True)
-            st.download_button("📥 Download CSV", df_final.to_csv(index=False, sep=";").encode("utf-8-sig"), "pedidos_extraidos.csv", "text/csv")
-            excel_path = "pedidos_extraidos.xlsx"
-            with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
-                df_final.to_excel(writer, index=False, sheet_name="Pedidos")
-                df_analise_final.to_excel(writer, index=False, sheet_name="Auditoria")
-            with open(excel_path, "rb") as f:
-                st.download_button("📥 Download Excel", f, "pedidos_extraidos.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            st.success("Processamento concluído com sucesso!")
+            confirmou_implantacao = st.checkbox(
+                "Confirmei se este pedido já foi emitido/implantado."
+            )
+            if st.button(
+                "✅ CONFIRMAR E REAVALIAR PEDIDOS",
+                disabled=not (confirmou_auditoria and confirmou_implantacao),
+            ):
+                try:
+                    salvar_uploads(uploaded_files)
+                    executar_processamento(
+                        uploaded_files,
+                        pedidos_pendentes,
+                        (confirmou_auditoria, confirmou_implantacao),
+                        usuario_revisao_atual,
+                    )
+                    st.session_state.pedidos_reavaliacao_pendentes = []
+                    st.session_state.arquivos_reavaliacao_pendentes = []
+                except Exception as erro:
+                    st.error("Não foi possível reavaliar os pedidos.")
+                    st.exception(erro)
+        elif st.button("🚀 PROCESSAR PEDIDOS"):
+            try:
+                salvar_uploads(uploaded_files)
+                pedidos_aprovados = approved_orders_in_batch(
+                    uploaded_files,
+                    extract_order_number,
+                    pedido_ja_aprovado,
+                )
+                if pedidos_aprovados:
+                    st.session_state.pedidos_reavaliacao_pendentes = pedidos_aprovados
+                    st.session_state.arquivos_reavaliacao_pendentes = assinaturas_arquivos
+                    st.rerun()
+                else:
+                    executar_processamento(
+                        uploaded_files,
+                        [],
+                        (False, False),
+                        usuario_revisao_atual,
+                    )
+            except Exception as erro:
+                st.error("Não foi possível processar os pedidos.")
+                st.exception(erro)
 
 elif menu == "📦 Itens Cadastrados":
     st.title("📦 Itens Cadastrados")
@@ -686,7 +776,7 @@ elif menu == "📦 Itens Cadastrados":
                                 usuario_revisao_atual,
                             )
                             if buscar_material(codigo):
-                                atualizar_material(*args)
+                                atualizar_material(*args, origem_alteracao="IMPORTAÇÃO EXCEL")
                                 atualizados += 1
                             else:
                                 inserir_material(*args)
@@ -733,6 +823,139 @@ elif menu == "📦 Itens Cadastrados":
                 st.session_state.modo_material = None
                 st.session_state.material_em_edicao = None
                 st.rerun()
+
+elif menu == "💰 Revisão de Preços":
+    st.title("💰 Revisão de Preços")
+    if perfil != "ADMIN":
+        st.error("Acesso negado.")
+        st.stop()
+
+    df_precos_desatualizados = build_outdated_prices_table(
+        listar_materiais_completo(),
+        date.today(),
+    )
+    st.metric("Produtos com preço desatualizado", len(df_precos_desatualizados))
+    if df_precos_desatualizados.empty:
+        st.success("Todos os produtos com preço cadastrado estão dentro do prazo de revisão.")
+    else:
+        st.caption("A lista considera preços sem data válida ou cuja última revisão ocorreu há mais de três meses.")
+        st.dataframe(df_precos_desatualizados, use_container_width=True, hide_index=True)
+
+elif menu == "🧾 Log":
+    st.title("🧾 Log")
+    if perfil != "ADMIN":
+        st.error("Acesso negado.")
+        st.stop()
+
+    df_log_auditorias = pd.DataFrame(
+        listar_logs_auditorias(),
+        columns=[
+            "Pedido",
+            "Tipo",
+            "Fiscal",
+            "Comercial",
+            "Usuário",
+            "Data/Hora",
+            "Confirmou Auditoria",
+            "Confirmou Implantação",
+            "Arquivo",
+        ],
+    )
+    df_log_precos = pd.DataFrame(
+        listar_logs_revisoes_preco(),
+        columns=[
+            "Código Material",
+            "Descrição",
+            "Preço Anterior",
+            "Preço Novo",
+            "Usuário",
+            "Data/Hora",
+            "Origem",
+        ],
+    )
+
+    aba_auditorias, aba_precos = st.tabs(["Auditorias de pedidos", "Revisões de preços"])
+    with aba_auditorias:
+        busca_auditoria = st.text_input(
+            "Pesquisar por pedido ou tipo",
+            key="busca_log_auditoria",
+        )
+        usuarios_auditoria = ["Todos"] + sorted(
+            valor
+            for valor in df_log_auditorias["Usuário"].dropna().astype(str).unique().tolist()
+            if valor.strip()
+        )
+        usuario_auditoria = st.selectbox(
+            "Usuário",
+            usuarios_auditoria,
+            key="usuario_log_auditoria",
+        )
+        filtrar_periodo_auditoria = st.checkbox(
+            "Filtrar por período",
+            key="periodo_log_auditoria",
+        )
+        inicio_auditoria = fim_auditoria = None
+        if filtrar_periodo_auditoria:
+            col_inicio, col_fim = st.columns(2)
+            inicio_auditoria = col_inicio.date_input(
+                "Data inicial",
+                value=date.today(),
+                key="inicio_log_auditoria",
+            )
+            fim_auditoria = col_fim.date_input(
+                "Data final",
+                value=date.today(),
+                key="fim_log_auditoria",
+            )
+        auditorias_filtradas = filter_audit_log(
+            df_log_auditorias,
+            busca_auditoria,
+            usuario_auditoria,
+            inicio_auditoria,
+            fim_auditoria,
+        )
+        st.dataframe(auditorias_filtradas, use_container_width=True, hide_index=True)
+
+    with aba_precos:
+        busca_preco = st.text_input(
+            "Pesquisar por código, descrição ou origem",
+            key="busca_log_preco",
+        )
+        usuarios_preco = ["Todos"] + sorted(
+            valor
+            for valor in df_log_precos["Usuário"].dropna().astype(str).unique().tolist()
+            if valor.strip()
+        )
+        usuario_preco = st.selectbox(
+            "Usuário",
+            usuarios_preco,
+            key="usuario_log_preco",
+        )
+        filtrar_periodo_preco = st.checkbox(
+            "Filtrar por período",
+            key="periodo_log_preco",
+        )
+        inicio_preco = fim_preco = None
+        if filtrar_periodo_preco:
+            col_inicio, col_fim = st.columns(2)
+            inicio_preco = col_inicio.date_input(
+                "Data inicial",
+                value=date.today(),
+                key="inicio_log_preco",
+            )
+            fim_preco = col_fim.date_input(
+                "Data final",
+                value=date.today(),
+                key="fim_log_preco",
+            )
+        precos_filtrados = filter_price_log(
+            df_log_precos,
+            busca_preco,
+            usuario_preco,
+            inicio_preco,
+            fim_preco,
+        )
+        st.dataframe(precos_filtrados, use_container_width=True, hide_index=True)
 
 elif menu == "🏛 Regras Fiscais":
     st.title("🏛 Regras Fiscais")
