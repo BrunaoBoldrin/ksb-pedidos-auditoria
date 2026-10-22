@@ -27,13 +27,12 @@ def menu_options_for_profile(profile):
             "📦 Itens Cadastrados",
             "💰 Revisão de Preços",
             "🏛 Regras Fiscais",
-            "📋 Histórico de Auditorias",
             "🧾 Log",
             "👤 Usuários",
             "🛠️ Ferramentas Administrativas",
         ]
     if profile == "VENDEDORA":
-        return ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados", "📋 Histórico de Auditorias"]
+        return ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados"]
     if profile == "PROCESSISTA":
         return ["📦 Itens Cadastrados"]
     return ["📄 Análise de Pedidos KSB"]

@@ -39,6 +39,11 @@ class AdminViewRulesTests(unittest.TestCase):
                 self.assertNotIn("💰 Revisão de Preços", options)
                 self.assertNotIn("🧾 Log", options)
 
+    def test_legacy_audit_history_menu_is_removed_for_every_profile(self):
+        for profile in ("ADMIN", "VENDEDORA", "PROCESSISTA", "OUTRO"):
+            with self.subTest(profile=profile):
+                self.assertNotIn("📋 Histórico de Auditorias", menu_options_for_profile(profile))
+
     def test_outdated_table_excludes_valid_and_missing_prices(self):
         rows = [
             material_row("SEM-DATA", "Sem data", 100.0, ""),

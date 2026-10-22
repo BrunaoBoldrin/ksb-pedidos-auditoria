@@ -1153,7 +1153,3 @@ elif menu == "🛠️ Ferramentas Administrativas":
                 for tabela, total in totais.items(): st.write(f"{tabela}: {total} registro(s) migrado(s)")
             except Exception as erro:
                 st.error("Erro ao executar migração."); st.exception(erro)
-
-elif menu == "📋 Histórico de Auditorias":
-    st.title("📋 Histórico de Auditorias")
-    st.info("Módulo em desenvolvimento")
