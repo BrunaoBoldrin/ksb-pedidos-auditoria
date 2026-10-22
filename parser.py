@@ -2,6 +2,7 @@ import re
 import pdfplumber
 import pandas as pd
 from database import buscar_material_por_codigo, localizar_regra_fiscal_por_ncm
+from price_rules import is_price_outdated
 
 from datetime import datetime
 
@@ -143,22 +144,27 @@ def diagnosticar_imposto_na_diferenca(diferenca_assinada, impostos):
 # ====================================
 
 
-def processar_pdf(PDF_PATH):
+def extract_pdf_text(pdf_path):
+    text_parts = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+                text_parts.append(text)
+    return "\n".join(text_parts) + ("\n" if text_parts else "")
+
+
+def extract_order_number(pdf_path):
+    text = extract_pdf_text(pdf_path)
+    match = re.search(r"Pedido\s+(\d+)", text)
+    return match.group(1) if match else ""
+
+
+def processar_pdf(PDF_PATH, price_reference_date=None):
     dados_csv = []
     analises = []
 
-    texto_completo = ""
-
-    # ====================================
-    # LEITURA PDF
-    # ====================================
-
-    with pdfplumber.open(PDF_PATH) as pdf:
-        for pagina in pdf.pages:
-            texto = pagina.extract_text()
-
-            if texto:
-                texto_completo += texto + "\n"
+    texto_completo = extract_pdf_text(PDF_PATH)
 
     # ====================================
     # PEDIDO
@@ -514,6 +520,13 @@ def processar_pdf(PDF_PATH):
                 diagnostico_comercial = montar_diagnostico(
                     "PREÇO NÃO CADASTRADO",
                     f"Informe o Preço Unitário Líquido no cadastro do material {codigo_material}.",
+                )
+            elif is_price_outdated(data_ultima_revisao_preco, price_reference_date):
+                status_comercial = "PENDENTE - REVISÃO DE PREÇO"
+                diagnostico_comercial = montar_diagnostico(
+                    "PREÇO NECESSITA DE REVISÃO: ATUALIZE O VALOR DO ITEM.",
+                    f"Última revisão: {data_ultima_revisao_preco or '-'} | Revisado por: {usuario_ultima_revisao_preco or '-'}.",
+                    f"Pedido KSB: {formatar_moeda_texto(preco_pedido_ksb)} | Cadastrado: {formatar_moeda_texto(preco_cadastrado)} | Diferença: {formatar_moeda_texto(diferenca_preco)}.",
                 )
             elif abs(diferenca_preco) > 0.01:
                 status_comercial = "PENDENTE - REVISÃO DE PREÇO"
