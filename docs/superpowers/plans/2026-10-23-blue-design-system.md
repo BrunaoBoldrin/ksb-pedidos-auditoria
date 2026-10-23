@@ -41,6 +41,6 @@
 ### Task 3: Review and delivery
 **Files:** docs/design-system/*, .github/workflows/test.yml, implementation docs.
 - [x] Run compilation, full unittest discovery and diff whitespace checks.
-- [ ] Review every changed file and browser-check desktop/mobile if supported.
-- [ ] Request fresh-context code review; fix material findings and verify regressions.
+- [x] Review every changed file; local browser unavailable (cloud cannot reach localhost). AppTest exercises authenticated screens.
+- [x] Fresh-context review completed. Navigation cleanup bug reproduced RED and fixed via upload on_change callback; regression included in CI.
 - [ ] Push feature branch, create PR to teste, verify safe merge, integrate and inspect Render deploy state.

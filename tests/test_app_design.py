@@ -72,6 +72,22 @@ class AppDesignTests(unittest.TestCase):
         self.assertNotIn("WGS-5520", html)
         self.assertEqual(self.writes.call_count, 0)
 
+    def test_navigation_round_trip_preserves_batch_but_explicit_removal_clears_it(self):
+        at = self.cached_app()
+        at.sidebar.radio[0].set_value("📦 Itens Cadastrados").run()
+        at.sidebar.radio[0].set_value("📄 Análise de Pedidos KSB").run()
+        self.assertEqual(len(at.exception), 0)
+        self.assertIsNotNone(at.session_state["resultados_processados"])
+        self.assertEqual(len(at.get("download_button")), 4)
+        self.assertEqual(self.writes.call_count, 0)
+
+        at = self.cached_app()
+        at.file_uploader[0].set_value([]).run()
+        self.assertEqual(len(at.exception), 0)
+        self.assertIsNone(at.session_state["resultados_processados"])
+        self.assertEqual(len(at.get("download_button")), 0)
+        self.assertEqual(self.writes.call_count, 0)
+
     def test_process_action_persists_once_and_download_rerun_keeps_batch(self):
         at = self.cached_app()
         results = at.session_state["resultados_processados"][0]

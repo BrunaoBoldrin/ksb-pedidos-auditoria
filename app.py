@@ -551,6 +551,14 @@ def executar_processamento(uploaded_files, pedidos_reavaliados, confirmacoes, us
     st.session_state.assinatura_resultados = upload_fingerprints(uploaded_files)
 
 
+def invalidar_resultados_por_upload():
+    """Only a user upload change invalidates the batch, not widget cleanup on navigation."""
+    st.session_state.resultados_processados = None
+    st.session_state.assinatura_resultados = None
+    st.session_state.pedidos_reavaliacao_pendentes = []
+    st.session_state.arquivos_reavaliacao_pendentes = []
+
+
 for chave in ["usuario_logado", "nome_usuario", "perfil_usuario"]:
     if chave not in st.session_state:
         st.session_state[chave] = None
@@ -603,13 +611,15 @@ pode_editar_materiais = perfil in ["ADMIN", "PROCESSISTA"]
 
 if menu == "📄 Análise de Pedidos KSB":
     page_header("Análise de Pedidos", "Importe seus PDFs para conferir os itens e os diagnósticos fiscal e comercial.")
-    uploaded_files = st.file_uploader("Selecione os PDFs", type=["pdf"], accept_multiple_files=True, key="pedidos_pdf")
-    assinatura_atual = upload_fingerprints(uploaded_files or [])
-    if st.session_state.get("assinatura_resultados") != assinatura_atual:
-        st.session_state.resultados_processados = None
-        st.session_state.assinatura_resultados = None
+    uploaded_files = st.file_uploader(
+        "Selecione os PDFs", type=["pdf"], accept_multiple_files=True,
+        key="pedidos_pdf", on_change=invalidar_resultados_por_upload,
+    )
     if not uploaded_files:
-        st.markdown('<section class="ds-empty"><h2>Seu próximo pedido começa aqui</h2><p>Arraste um ou mais PDFs para a área acima ou escolha os arquivos no computador.</p></section>', unsafe_allow_html=True)
+        if st.session_state.get("resultados_processados") is not None:
+            st.info("Exibindo o último lote processado nesta sessão. Envie novos PDFs para iniciar outra análise.")
+        else:
+            st.markdown('<section class="ds-empty"><h2>Seu próximo pedido começa aqui</h2><p>Arraste um ou mais PDFs para a área acima ou escolha os arquivos no computador.</p></section>', unsafe_allow_html=True)
 
     if uploaded_files:
         st.success(f"{len(uploaded_files)} PDF(s) carregado(s)")
