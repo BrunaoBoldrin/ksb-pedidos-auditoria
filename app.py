@@ -593,14 +593,33 @@ perfil = st.session_state.perfil_usuario
 usuario_revisao_atual = st.session_state.nome_usuario or st.session_state.usuario_logado
 opcoes_menu = menu_options_for_profile(perfil)
 
+if st.session_state.get("pagina_atual") not in opcoes_menu:
+    st.session_state.pagina_atual = opcoes_menu[0]
+
+
+def selecionar_pagina(pagina):
+    st.session_state.pagina_atual = pagina
+
+
 with st.sidebar:
     st.markdown('<div class="ds-brand"><strong>pedidos</strong><span>METAIS GLÓRIA · KSB</span></div>', unsafe_allow_html=True)
     st.markdown(profile_html(st.session_state.nome_usuario, perfil), unsafe_allow_html=True)
-    menu = st.radio("Navegação", opcoes_menu, key="navegacao", label_visibility="collapsed")
+    for opcao in opcoes_menu:
+        selecionado = st.session_state.pagina_atual == opcao
+        st.button(
+            opcao,
+            key=f"nav_{opcao}",
+            type="primary" if selecionado else "secondary",
+            use_container_width=True,
+            on_click=selecionar_pagina,
+            args=(opcao,),
+        )
+    menu = st.session_state.pagina_atual
     st.divider()
     if st.button("Sair da conta", key="sair_conta", use_container_width=True):
         for chave in ("resultados_processados", "assinatura_resultados", "pedidos_reavaliacao_pendentes",
-                      "arquivos_reavaliacao_pendentes", "pedidos_pdf", "filtro_resultados", "filtro_pedido_resultados"):
+                      "arquivos_reavaliacao_pendentes", "pedidos_pdf", "filtro_resultados", "filtro_pedido_resultados",
+                      "pagina_atual"):
             st.session_state.pop(chave, None)
         st.session_state.usuario_logado = None
         st.session_state.nome_usuario = None
