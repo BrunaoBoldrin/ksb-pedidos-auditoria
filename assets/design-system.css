@@ -13,18 +13,17 @@ html, body, [data-testid="stApp"] {
 }
 [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] { padding: 1.8rem 1rem; }
 [data-testid="stSidebar"] label, [data-testid="stSidebar"] p { color: #DCE9FF; }
-[data-testid="stSidebar"] [data-testid="stRadio"] label {
-  min-height: 44px; border-radius: 10px; padding: 10px 12px; width: 100%;
-  border: 1px solid transparent; transition: background var(--motion-fast);
-}
-[data-testid="stSidebar"] [data-testid="stRadio"] label:hover { background: #ffffff12; }
-[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
-  background: #ffffff24; color: white; border-color: #ffffff24;
-}
-[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) p { color: white; font-weight: 700; }
-[data-testid="stSidebar"] [data-baseweb="radio"] > div:first-child { display: none; }
 [data-testid="stSidebar"] button { color: white; background: #ffffff0c; border-color: #ffffff45; }
 [data-testid="stSidebar"] button:hover { color: white; border-color: #C7DEFF; background: #ffffff1c; }
+[data-testid="stSidebar"] [data-testid="stButton"] button {
+  min-height: 48px; width: 100%; border-radius: 10px; padding: 12px 14px;
+  justify-content: flex-start; text-align: left; transition: background var(--motion-fast);
+}
+[data-testid="stSidebar"] [data-testid="stButton"] button p { text-align: left; color: white; }
+[data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] {
+  background: var(--brand-primary); border-color: #85B8FF; color: white;
+}
+[data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"]:hover { background: #1660CC; }
 .ds-brand { color: white; margin: 0 10px 28px; }
 .ds-brand strong { display: block; font-size: 32px; letter-spacing: -.8px; line-height: 1.3; }
 .ds-brand span { display: block; margin-top: 5px; font-size: 12px; letter-spacing: 1px; color: #C7DEFF; }

@@ -74,8 +74,8 @@ class AppDesignTests(unittest.TestCase):
 
     def test_navigation_round_trip_preserves_batch_but_explicit_removal_clears_it(self):
         at = self.cached_app()
-        at.sidebar.radio[0].set_value("📦 Itens Cadastrados").run()
-        at.sidebar.radio[0].set_value("📄 Análise de Pedidos KSB").run()
+        at.sidebar.button(key="nav_📦 Itens Cadastrados").click().run()
+        at.sidebar.button(key="nav_📄 Análise de Pedidos KSB").click().run()
         self.assertEqual(len(at.exception), 0)
         self.assertIsNotNone(at.session_state["resultados_processados"])
         self.assertEqual(len(at.get("download_button")), 4)
@@ -123,7 +123,7 @@ class AppDesignTests(unittest.TestCase):
             ("👤 Usuários", "➕ Novo Usuário", "Nome"),
         ]:
             with self.subTest(menu=menu):
-                at.sidebar.radio[0].set_value(menu).run()
+                at.sidebar.button(key=f"nav_{menu}").click().run()
                 next(b for b in at.button if b.label == action).click().run()
                 self.assertEqual(len(at.exception), 0)
                 self.assertIn(label, [w.label for w in at.text_input])
@@ -138,6 +138,15 @@ class AppDesignTests(unittest.TestCase):
         self.assertEqual([w.label for w in at.text_input], ["Usuário", "Senha"])
 
     def test_every_authorized_menu_renders_without_database_writes(self):
+        headings = {
+            "📄 Análise de Pedidos KSB": "Análise de Pedidos",
+            "📦 Itens Cadastrados": "Itens Cadastrados",
+            "💰 Revisão de Preços": "Revisão de Preços",
+            "🏛 Regras Fiscais": "Regras Fiscais",
+            "🧾 Log": "Log",
+            "👤 Usuários": "Usuários",
+            "🛠️ Ferramentas Administrativas": "Ferramentas Administrativas",
+        }
         expected = {
             "ADMIN": ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados", "💰 Revisão de Preços", "🏛 Regras Fiscais", "🧾 Log", "👤 Usuários", "🛠️ Ferramentas Administrativas"],
             "VENDEDORA": ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados"],
@@ -147,10 +156,15 @@ class AppDesignTests(unittest.TestCase):
         for profile, menus in expected.items():
             with self.subTest(profile=profile):
                 at = self.app(profile)
-                self.assertEqual(at.sidebar.radio[0].options, menus)
+                self.assertEqual([b.label for b in at.sidebar.button if (b.key or "").startswith("nav_")], menus)
+                self.assertEqual(len(at.sidebar.radio), 0)
                 for menu in menus:
-                    at.sidebar.radio[0].set_value(menu).run()
+                    at.sidebar.button(key=f"nav_{menu}").click().run()
                     self.assertEqual(len(at.exception), 0, menu)
+                    self.assertEqual(at.session_state["pagina_atual"], menu)
+                    self.assertIn(f"<h1>{headings[menu]}</h1>", "\n".join(m.value for m in at.markdown))
+                at.run()
+                self.assertEqual(at.session_state["pagina_atual"], menus[-1])
         self.assertEqual(self.writes.call_count, 0)
 
     def test_reaudit_stays_disabled_until_both_literal_confirmations(self):
