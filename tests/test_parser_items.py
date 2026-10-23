@@ -1,13 +1,5 @@
-import sys
-import types
 import unittest
 from unittest.mock import patch
-
-
-database = types.ModuleType("database")
-database.buscar_material_por_codigo = lambda codigo: None
-database.localizar_regra_fiscal_por_ncm = lambda ncm: None
-sys.modules["database"] = database
 
 import parser
 
@@ -43,6 +35,12 @@ NCM: 7419.80.90
 
 
 class TestIdentificacaoItens(unittest.TestCase):
+    def setUp(self):
+        for name in ("buscar_material_por_codigo", "localizar_regra_fiscal_por_ncm"):
+            mocked = patch.object(parser, name, return_value=None)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
     def test_codigos_alfanumericos_entram_na_extracao_e_diagnostico(self):
         codigos = ["02154693", "WGS-5520", "AB1234", "wgs-5520"]
         itens = ["00010", "00100", "00110", "00120"]
