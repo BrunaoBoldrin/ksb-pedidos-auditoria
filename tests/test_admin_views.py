@@ -90,6 +90,31 @@ class AdminViewRulesTests(unittest.TestCase):
 
         self.assertEqual(prices["Código Material"].tolist(), ["WGS-[5520]"])
 
+    def test_log_displays_utc_timestamp_in_sao_paulo_time(self):
+        audit_df = pd.DataFrame(
+            [["4501", "PRIMEIRA ANÁLISE", "OK", "OK", "Ana", "2026-10-23T17:44:51+00:00"]],
+            columns=["Pedido", "Tipo", "Fiscal", "Comercial", "Usuário", "Data/Hora"],
+        )
+
+        audits = filter_audit_log(audit_df)
+
+        self.assertEqual(audits.iloc[0]["Data/Hora"], "23/10/2026 14:44:51")
+
+    def test_log_period_filter_uses_sao_paulo_calendar_date(self):
+        audit_df = pd.DataFrame(
+            [["4501", "PRIMEIRA ANÁLISE", "OK", "OK", "Ana", "2026-10-23T01:30:00+00:00"]],
+            columns=["Pedido", "Tipo", "Fiscal", "Comercial", "Usuário", "Data/Hora"],
+        )
+
+        audits = filter_audit_log(
+            audit_df,
+            start=date(2026, 10, 22),
+            end=date(2026, 10, 22),
+        )
+
+        self.assertEqual(audits["Pedido"].tolist(), ["4501"])
+        self.assertEqual(audits.iloc[0]["Data/Hora"], "22/10/2026 22:30:00")
+
 
 if __name__ == "__main__":
     unittest.main()

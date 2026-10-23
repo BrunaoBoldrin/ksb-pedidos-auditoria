@@ -1,5 +1,7 @@
 """Transformações puras usadas pelas telas administrativas Streamlit."""
 
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 
 from price_rules import is_price_outdated, parse_review_date
@@ -18,6 +20,21 @@ MATERIAL_COLUMNS = [
     "Última Revisão",
     "Usuário Última Revisão",
 ]
+
+SAO_PAULO_TIMEZONE = ZoneInfo("America/Sao_Paulo")
+
+
+def _parse_log_timestamp(value):
+    try:
+        timestamp = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return pd.NaT
+
+    if pd.isna(timestamp):
+        return pd.NaT
+    if timestamp.tzinfo is None:
+        return timestamp.tz_localize(SAO_PAULO_TIMEZONE)
+    return timestamp.tz_convert(SAO_PAULO_TIMEZONE)
 
 
 def menu_options_for_profile(profile):
@@ -106,12 +123,26 @@ def _filter_log(dataframe, query, user, start, end, searchable_columns):
         result = result[result["Usuário"].astype(str) == user]
 
     if "Data/Hora" in result.columns:
-        timestamps = pd.to_datetime(result["Data/Hora"], errors="coerce")
+        timestamps = result["Data/Hora"].map(_parse_log_timestamp)
         if start is not None:
-            result = result[timestamps.dt.date >= start]
-            timestamps = pd.to_datetime(result["Data/Hora"], errors="coerce")
+            result = result[
+                timestamps.map(
+                    lambda timestamp: not pd.isna(timestamp) and timestamp.date() >= start
+                )
+            ]
         if end is not None:
-            result = result[timestamps.dt.date <= end]
+            result = result[
+                timestamps.map(
+                    lambda timestamp: not pd.isna(timestamp) and timestamp.date() <= end
+                )
+            ]
+
+        result = result.copy()
+        result["Data/Hora"] = timestamps.loc[result.index].map(
+            lambda timestamp: ""
+            if pd.isna(timestamp)
+            else timestamp.strftime("%d/%m/%Y %H:%M:%S")
+        )
 
     return result.reset_index(drop=True)
 
