@@ -36,12 +36,15 @@ from ui_components import (
     apply_design,
     cabecalho_item_html,
     dataframe_to_excel_bytes,
+    format_currency_columns,
+    formatar_moeda_brl,
     filtrar_itens,
     metric_html,
     page_header,
     painel_diagnostico_html,
     profile_html,
     render_summary,
+    write_dataframe_to_excel,
 )
 from ui_rules import (
     build_outdated_prices_table,
@@ -68,10 +71,7 @@ def botao_download_excel(dataframe, label, file_name, sheet_name, key):
 
 
 def formatar_moeda(valor):
-    try:
-        return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except Exception:
-        return "-"
+    return formatar_moeda_brl(valor) or "-"
 
 
 def valor_texto(linha, coluna, padrao="-"):
@@ -526,7 +526,7 @@ def exibir_resultados_processamento(resultados):
     )
     st.divider()
     st.subheader("📦 Dados Extraídos")
-    st.dataframe(df_final, use_container_width=True)
+    st.dataframe(format_currency_columns(df_final), use_container_width=True)
     st.download_button(
         "📥 Download CSV",
         df_final.to_csv(index=False, sep=";").encode("utf-8-sig"),
@@ -535,8 +535,8 @@ def exibir_resultados_processamento(resultados):
     )
     excel_buffer = BytesIO()
     with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-        df_final.to_excel(writer, index=False, sheet_name="Pedidos")
-        df_analise_final.to_excel(writer, index=False, sheet_name="Auditoria")
+        write_dataframe_to_excel(writer, df_final, "Pedidos")
+        write_dataframe_to_excel(writer, df_analise_final, "Auditoria")
     st.download_button(
         "📥 Download Excel",
         excel_buffer.getvalue(),
@@ -755,9 +755,11 @@ elif menu == "📦 Itens Cadastrados":
         st.info("Nenhum item cadastrado.")
         materiais_selecionados = pd.DataFrame()
     else:
-        df_materiais.insert(0, "Selecionar", False)
-        tabela_materiais = st.data_editor(df_materiais, use_container_width=True, hide_index=True)
-        materiais_selecionados = tabela_materiais[tabela_materiais["Selecionar"] == True]
+        tabela_materiais_exibicao = format_currency_columns(df_materiais)
+        tabela_materiais_exibicao.insert(0, "Selecionar", False)
+        tabela_materiais = st.data_editor(tabela_materiais_exibicao, use_container_width=True, hide_index=True)
+        indices_selecionados = tabela_materiais.index[tabela_materiais["Selecionar"] == True]
+        materiais_selecionados = df_materiais.loc[indices_selecionados]
         botao_download_excel(
             df_materiais,
             "📥 Baixar itens em Excel",
@@ -821,7 +823,7 @@ elif menu == "📦 Itens Cadastrados":
                     st.warning("Nenhuma linha válida foi encontrada para importação.")
                 else:
                     st.success(f"Arquivo lido com {len(df_importacao)} material(is) válido(s).")
-                    st.dataframe(df_importacao.head(20), use_container_width=True)
+                    st.dataframe(format_currency_columns(df_importacao.head(20)), use_container_width=True)
                     st.caption("Pré-visualização das primeiras 20 linhas. A importação considera todas as linhas válidas.")
                     if st.button("🚀 Importar Materiais"):
                         inseridos = 0
@@ -923,7 +925,7 @@ elif menu == "💰 Revisão de Preços":
         st.success("Todos os produtos com preço cadastrado estão dentro do prazo de revisão.")
     else:
         st.caption("A lista considera preços sem data válida ou cuja última revisão ocorreu há mais de três meses.")
-        st.dataframe(df_precos_desatualizados, use_container_width=True, hide_index=True)
+        st.dataframe(format_currency_columns(df_precos_desatualizados), use_container_width=True, hide_index=True)
         botao_download_excel(
             df_precos_desatualizados,
             "📥 Baixar preços desatualizados em Excel",
@@ -1055,7 +1057,7 @@ elif menu == "🧾 Log":
             inicio_preco,
             fim_preco,
         )
-        st.dataframe(precos_filtrados, use_container_width=True, hide_index=True)
+        st.dataframe(format_currency_columns(precos_filtrados), use_container_width=True, hide_index=True)
         botao_download_excel(
             precos_filtrados,
             "📥 Baixar revisões de preços em Excel",
