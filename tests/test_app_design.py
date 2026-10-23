@@ -1,6 +1,7 @@
 """Real Streamlit screens with external database I/O isolated from tests."""
 
 import hashlib
+import re
 import tempfile
 import unittest
 from contextlib import ExitStack, chdir
@@ -166,6 +167,23 @@ class AppDesignTests(unittest.TestCase):
                 at.run()
                 self.assertEqual(at.session_state["pagina_atual"], menus[-1])
         self.assertEqual(self.writes.call_count, 0)
+
+    def test_native_tables_do_not_create_a_second_scroll_container(self):
+        at = self.app()
+        injected_styles = "\n".join(
+            markdown.value
+            for markdown in at.markdown
+            if "stDataFrame" in markdown.value or "stDataEditor" in markdown.value
+        )
+
+        table_rule = re.search(
+            r'\[data-testid="stDataFrame"\].*?\{(?P<declarations>[^}]*)\}',
+            injected_styles,
+            flags=re.DOTALL,
+        )
+
+        self.assertIsNotNone(table_rule)
+        self.assertRegex(table_rule.group("declarations"), r"overflow\s*:\s*hidden\s*;")
 
     def test_reaudit_stays_disabled_until_both_literal_confirmations(self):
         at = self.app()
