@@ -567,7 +567,7 @@ if st.session_state.usuario_logado is None:
     marca_col, login_col = st.columns([1.15, 1], gap="large")
     with marca_col:
         st.markdown(
-            '<section class="ds-login-hero"><div class="ds-brand"><strong>pedidos</strong>'
+            '<section class="ds-login-hero"><div class="ds-brand"><strong>Pedidos</strong>'
             '<span>METAIS GLÓRIA · AUDITORIA KSB</span></div>'
             '<h1>Analisador de<br>Pedidos KSB</h1>'
             '<p>Auditoria fiscal e análise comercial em uma única área de trabalho.</p></section>',
@@ -602,7 +602,7 @@ def selecionar_pagina(pagina):
 
 
 with st.sidebar:
-    st.markdown('<div class="ds-brand"><strong>pedidos</strong><span>METAIS GLÓRIA · KSB</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-brand"><strong>Pedidos</strong><span>METAIS GLÓRIA · KSB</span></div>', unsafe_allow_html=True)
     st.markdown(profile_html(st.session_state.nome_usuario, perfil), unsafe_allow_html=True)
     for opcao in opcoes_menu:
         selecionado = st.session_state.pagina_atual == opcao

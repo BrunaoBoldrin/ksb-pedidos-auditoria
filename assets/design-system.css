@@ -17,7 +17,10 @@ html, body, [data-testid="stApp"] {
 [data-testid="stSidebar"] button:hover { color: white; border-color: #C7DEFF; background: #ffffff1c; }
 [data-testid="stSidebar"] [data-testid="stButton"] button {
   min-height: 48px; width: 100%; border-radius: 10px; padding: 12px 14px;
-  justify-content: flex-start; text-align: left; transition: background var(--motion-fast);
+  align-items: center; justify-content: flex-start; text-align: left; transition: background var(--motion-fast);
+}
+[data-testid="stSidebar"] [data-testid="stButton"] button > div {
+  width: 100%; align-items: center; justify-content: flex-start;
 }
 [data-testid="stSidebar"] [data-testid="stButton"] button p { text-align: left; color: white; }
 [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] {
