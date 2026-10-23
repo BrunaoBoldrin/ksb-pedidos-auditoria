@@ -224,6 +224,31 @@ class AppDesignTests(unittest.TestCase):
                     for label in expected_labels:
                         self.assertIn(label, labels)
 
+    def test_price_tables_display_brazilian_currency(self):
+        material = (
+            "001492536", "PROTETOR ACOPL", "LATÃO", "BRN66/C08", "7419.80.90",
+            "PEÇAS", "DI039501430000", "DI039503930000", 1234.5,
+            "2026-01-01", "Administrador",
+        )
+        price_log = (
+            "001492536", "PROTETOR ACOPL", 1000.0, 1234.5, "Ana",
+            "2026-10-23T17:44:51+00:00", "ALTERAÇÃO PELO SISTEMA",
+        )
+        with patch.object(database, "listar_materiais_completo", return_value=[material]), patch.object(
+            database, "listar_logs_revisoes_preco", return_value=[price_log]
+        ):
+            at = self.app()
+
+            at.sidebar.button(key="nav_📦 Itens Cadastrados").click().run()
+            self.assertEqual(at.dataframe[0].value.loc[0, "Preço Unitário Líquido"], "R$ 1.234,50")
+
+            at.sidebar.button(key="nav_💰 Revisão de Preços").click().run()
+            self.assertEqual(at.dataframe[0].value.loc[0, "Preço Unitário Líquido"], "R$ 1.234,50")
+
+            at.sidebar.button(key="nav_🧾 Log").click().run()
+            self.assertEqual(at.dataframe[1].value.loc[0, "Preço Anterior"], "R$ 1.000,00")
+            self.assertEqual(at.dataframe[1].value.loc[0, "Preço Novo"], "R$ 1.234,50")
+
     def test_reaudit_stays_disabled_until_both_literal_confirmations(self):
         at = self.app()
         content = b"approved order fixture"
