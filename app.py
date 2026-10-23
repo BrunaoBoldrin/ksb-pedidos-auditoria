@@ -35,6 +35,7 @@ from parser import calcular_divisor_base, extract_order_number, processar_pdf
 from ui_components import (
     apply_design,
     cabecalho_item_html,
+    dataframe_to_excel_bytes,
     filtrar_itens,
     metric_html,
     page_header,
@@ -52,6 +53,18 @@ from ui_rules import (
 st.set_page_config(page_title="Analisador de Pedidos", page_icon="📄", layout="wide")
 
 apply_design()
+
+EXCEL_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def botao_download_excel(dataframe, label, file_name, sheet_name, key):
+    st.download_button(
+        label,
+        dataframe_to_excel_bytes(dataframe, sheet_name),
+        file_name,
+        EXCEL_MIME_TYPE,
+        key=key,
+    )
 
 
 def formatar_moeda(valor):
@@ -745,6 +758,13 @@ elif menu == "📦 Itens Cadastrados":
         df_materiais.insert(0, "Selecionar", False)
         tabela_materiais = st.data_editor(df_materiais, use_container_width=True, hide_index=True)
         materiais_selecionados = tabela_materiais[tabela_materiais["Selecionar"] == True]
+        botao_download_excel(
+            df_materiais,
+            "📥 Baixar itens em Excel",
+            "itens_cadastrados.xlsx",
+            "Itens",
+            "download_excel_itens",
+        )
 
     st.divider()
     col_importar, col_novo, col_editar, col_excluir = st.columns(4)
@@ -904,6 +924,13 @@ elif menu == "💰 Revisão de Preços":
     else:
         st.caption("A lista considera preços sem data válida ou cuja última revisão ocorreu há mais de três meses.")
         st.dataframe(df_precos_desatualizados, use_container_width=True, hide_index=True)
+        botao_download_excel(
+            df_precos_desatualizados,
+            "📥 Baixar preços desatualizados em Excel",
+            "precos_desatualizados.xlsx",
+            "Preços desatualizados",
+            "download_excel_precos_desatualizados",
+        )
 
 elif menu == "🧾 Log":
     page_header("Log", "Rastreabilidade das auditorias de pedidos e das alterações reais de preço.")
@@ -980,6 +1007,13 @@ elif menu == "🧾 Log":
             fim_auditoria,
         )
         st.dataframe(auditorias_filtradas, use_container_width=True, hide_index=True)
+        botao_download_excel(
+            auditorias_filtradas,
+            "📥 Baixar auditorias em Excel",
+            "auditorias_pedidos.xlsx",
+            "Auditorias",
+            "download_excel_auditorias",
+        )
 
     with aba_precos:
         busca_col, usuario_col = st.columns([2, 1])
@@ -1022,6 +1056,13 @@ elif menu == "🧾 Log":
             fim_preco,
         )
         st.dataframe(precos_filtrados, use_container_width=True, hide_index=True)
+        botao_download_excel(
+            precos_filtrados,
+            "📥 Baixar revisões de preços em Excel",
+            "revisoes_precos.xlsx",
+            "Revisões de preços",
+            "download_excel_revisoes_precos",
+        )
 
 elif menu == "🏛 Regras Fiscais":
     page_header("Regras Fiscais", "Consulte os critérios por NCM e mantenha as alíquotas cadastradas.")
@@ -1039,6 +1080,13 @@ elif menu == "🏛 Regras Fiscais":
         df_regras.insert(0, "Selecionar", False)
         tabela_regras = st.data_editor(df_regras, use_container_width=True, hide_index=True)
         regras_selecionadas = tabela_regras[tabela_regras["Selecionar"] == True]
+        botao_download_excel(
+            df_regras,
+            "📥 Baixar regras fiscais em Excel",
+            "regras_fiscais.xlsx",
+            "Regras fiscais",
+            "download_excel_regras_fiscais",
+        )
     st.divider()
     col_nova, col_editar, col_excluir = st.columns(3)
     with col_nova:
@@ -1143,6 +1191,13 @@ elif menu == "👤 Usuários":
         df_usuarios.insert(0, "Selecionar", False)
         tabela_usuarios = st.data_editor(df_usuarios, use_container_width=True, hide_index=True, disabled=["ID", "Nome", "Usuário", "Perfil", "Status", "Ativo"])
         usuarios_selecionados = tabela_usuarios[tabela_usuarios["Selecionar"] == True]
+        botao_download_excel(
+            df_usuarios,
+            "📥 Baixar usuários em Excel",
+            "usuarios.xlsx",
+            "Usuários",
+            "download_excel_usuarios",
+        )
     st.divider(); c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         if st.button("➕ Novo Usuário"):

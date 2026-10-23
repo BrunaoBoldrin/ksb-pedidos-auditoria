@@ -185,6 +185,45 @@ class AppDesignTests(unittest.TestCase):
         self.assertIsNotNone(table_rule)
         self.assertRegex(table_rule.group("declarations"), r"overflow\s*:\s*hidden\s*;")
 
+    def test_table_pages_offer_excel_downloads(self):
+        material = (
+            "001492536", "PROTETOR ACOPL", "LATÃO", "BRN66/C08", "7419.80.90",
+            "PEÇAS", "DI039501430000", "DI039503930000", 405.62,
+            "2026-01-01", "Administrador",
+        )
+        with patch.object(database, "listar_materiais_completo", return_value=[material]), patch.object(
+            database,
+            "listar_logs_auditorias",
+            return_value=[("4501", "PRIMEIRA ANÁLISE", "OK", "OK", "Ana", "2026-10-23T17:44:51+00:00", False, False, "pedido.pdf")],
+        ), patch.object(
+            database,
+            "listar_logs_revisoes_preco",
+            return_value=[("001492536", "PROTETOR ACOPL", 400.0, 405.62, "Ana", "2026-10-23T17:44:51+00:00", "ALTERAÇÃO PELO SISTEMA")],
+        ), patch.object(
+            database,
+            "listar_regras_fiscais",
+            return_value=[(1, "7419.80.90", 12.0, 3.25, "LATÃO", 1)],
+        ), patch.object(
+            database,
+            "listar_usuarios",
+            return_value=[(1, "Administrador", "admin", "ADMIN", 1)],
+        ):
+            at = self.app()
+            expected_by_menu = {
+                "📦 Itens Cadastrados": ["📥 Baixar itens em Excel"],
+                "💰 Revisão de Preços": ["📥 Baixar preços desatualizados em Excel"],
+                "🧾 Log": ["📥 Baixar auditorias em Excel", "📥 Baixar revisões de preços em Excel"],
+                "🏛 Regras Fiscais": ["📥 Baixar regras fiscais em Excel"],
+                "👤 Usuários": ["📥 Baixar usuários em Excel"],
+            }
+
+            for menu, expected_labels in expected_by_menu.items():
+                with self.subTest(menu=menu):
+                    at.sidebar.button(key=f"nav_{menu}").click().run()
+                    labels = [button.label for button in at.get("download_button")]
+                    for label in expected_labels:
+                        self.assertIn(label, labels)
+
     def test_reaudit_stays_disabled_until_both_literal_confirmations(self):
         at = self.app()
         content = b"approved order fixture"

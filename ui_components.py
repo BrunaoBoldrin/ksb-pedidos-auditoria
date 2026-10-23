@@ -5,9 +5,18 @@ All values embedded in HTML are escaped, including diagnostic text from PDFs.
 """
 
 from html import escape
+from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
+
+
+def dataframe_to_excel_bytes(dataframe, sheet_name="Dados"):
+    table = dataframe.drop(columns=["Selecionar"], errors="ignore")
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        table.to_excel(writer, index=False, sheet_name=sheet_name)
+    return buffer.getvalue()
 
 
 def texto(valor, padrao="—"):

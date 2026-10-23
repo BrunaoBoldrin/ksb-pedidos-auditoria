@@ -1,7 +1,11 @@
 import unittest
 from html.parser import HTMLParser
+from io import BytesIO
 
 import pandas as pd
+from openpyxl import load_workbook
+
+import ui_components
 
 from ui_components import (
     cabecalho_item_html,
@@ -77,6 +81,19 @@ class PresentationTests(unittest.TestCase):
         self.assertIn("br", reader.tags)
         self.assertIn("PREÇO NECESSITA DE REVISÃO: ATUALIZE O VALOR DO ITEM.", "".join(reader.text))
         self.assertIn("Última revisão: 22/07/2026", "".join(reader.text))
+
+    def test_excel_export_contains_business_columns_and_preserves_text_codes(self):
+        exporter = getattr(ui_components, "dataframe_to_excel_bytes", None)
+        self.assertTrue(callable(exporter), "A exportação Excel das tabelas deve estar disponível")
+        frame = pd.DataFrame(
+            [{"Selecionar": False, "Código Material": "001492536", "Descrição": "PROTETOR ACOPL"}]
+        )
+
+        workbook = load_workbook(BytesIO(exporter(frame, "Itens")), read_only=True)
+        rows = list(workbook["Itens"].values)
+
+        self.assertEqual(rows[0], ("Código Material", "Descrição"))
+        self.assertEqual(rows[1], ("001492536", "PROTETOR ACOPL"))
 
 
 if __name__ == "__main__":
