@@ -1,0 +1,95 @@
+{
+  "name": "Analisador de Pedidos KSB",
+  "version": "1.1.0",
+  "status": "Aprovado e implementado na branch teste",
+  "date": "2026-10-23",
+  "color": {
+    "brand-primary": "#0A4BB3",
+    "brand-hover": "#083987",
+    "brand-deep": "#0B1B3D",
+    "brand-mint": "#C7DEFF",
+    "success-bg": "#EAF6EE",
+    "success-text": "#166347",
+    "warning-bg": "#FFF3DB",
+    "warning-text": "#8A5300",
+    "error-bg": "#FDEDEF",
+    "error-text": "#AF303E",
+    "info-bg": "#EAF2FA",
+    "info-text": "#255F91",
+    "canvas": "#F5F7FB",
+    "surface": "#FFFFFF",
+    "text-primary": "#1B293D",
+    "text-secondary": "#5C6C82",
+    "border": "#DCE3EE",
+    "control-border": "#72849C",
+    "focus": "#0A4BB3",
+    "disabled-bg": "#E1E7F0"
+  },
+  "font": {
+    "family": [
+      "Nimbus Sans",
+      "Arial",
+      "sans-serif"
+    ],
+    "size": {
+      "label": 14,
+      "body": 16,
+      "subtitle": 20,
+      "h2": 24,
+      "h1": 32
+    },
+    "weight": {
+      "regular": 400,
+      "bold": 700
+    },
+    "lineHeight": {
+      "body": 1.5,
+      "heading": 1.2
+    }
+  },
+  "space": {
+    "1": 4,
+    "2": 8,
+    "3": 12,
+    "4": 16,
+    "6": 24,
+    "8": 32,
+    "12": 48,
+    "16": 64
+  },
+  "radius": {
+    "control": 8,
+    "card": 12,
+    "shell": 20,
+    "pill": 999
+  },
+  "size": {
+    "sidebar": 232,
+    "field": 44,
+    "button": 44,
+    "touchTarget": 44,
+    "tableRow": 56,
+    "tableHeader": 40
+  },
+  "breakpoint": {
+    "tabletMin": 768,
+    "desktopMin": 1200
+  },
+  "motion": {
+    "fastMs": 120,
+    "normalMs": 180,
+    "easing": "ease-out"
+  },
+  "shadow": {
+    "card": "0 2px 8px rgb(11 27 61 / 4%)",
+    "dialog": "0 20px 64px rgb(11 27 61 / 18%)"
+  },
+  "zIndex": {
+    "base": 0,
+    "sticky": 10,
+    "drawer": 30,
+    "overlay": 40,
+    "dialog": 50,
+    "toast": 60
+  }
+}

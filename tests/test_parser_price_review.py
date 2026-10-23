@@ -1,14 +1,7 @@
-import sys
-import types
 import unittest
 from datetime import date
 from unittest.mock import patch
 
-
-database = types.ModuleType("database")
-database.buscar_material_por_codigo = lambda codigo: None
-database.localizar_regra_fiscal_por_ncm = lambda ncm: None
-sys.modules["database"] = database
 
 import parser
 
@@ -45,6 +38,12 @@ NCM: 7419.80.90
 
 
 class ParserPriceReviewTests(unittest.TestCase):
+    def setUp(self):
+        for name in ("buscar_material_por_codigo", "localizar_regra_fiscal_por_ncm"):
+            mocked = patch.object(parser, name, return_value=None)
+            mocked.start()
+            self.addCleanup(mocked.stop)
+
     def registered_material(self, review_date):
         return {
             "codigo_material": "WGS-5520",
