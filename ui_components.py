@@ -11,11 +11,71 @@ from pathlib import Path
 import pandas as pd
 
 
-def dataframe_to_excel_bytes(dataframe, sheet_name="Dados"):
+EXCEL_BRL_NUMBER_FORMAT = '[$R$-pt-BR] #,##0.00'
+MONETARY_COLUMNS = {
+    "Preço Unitário Líquido",
+    "Preço Pedido KSB",
+    "Preço Cadastrado",
+    "Preço Cadastrado c/ Imposto",
+    "Preço Anterior",
+    "Preço Novo",
+    "Diferença Preço",
+    "Valor Total",
+    "Valor Unitario",
+    "Valor Unitário Líquido",
+    "Valor Base",
+    "Valor Pedido",
+    "Valor Calculado",
+    "Diferença",
+    "Valor ICMS",
+    "Base PIS/COFINS",
+    "Valor PIS",
+    "Valor COFINS",
+    "Valor PIS/COFINS",
+    "Valor IPI",
+}
+
+
+def formatar_moeda_brl(valor):
+    if valor is None or pd.isna(valor):
+        return ""
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        texto_numero = str(valor).strip().replace("R$", "").strip()
+        if "," not in texto_numero:
+            return str(valor)
+        try:
+            numero = float(texto_numero.replace(".", "").replace(",", "."))
+        except ValueError:
+            return str(valor)
+    formatado = f"{abs(numero):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    sinal = "-" if numero < 0 else ""
+    return f"R$ {sinal}{formatado}"
+
+
+def format_currency_columns(dataframe):
+    table = dataframe.copy()
+    for column in MONETARY_COLUMNS.intersection(table.columns):
+        table[column] = table[column].map(formatar_moeda_brl)
+    return table
+
+
+def write_dataframe_to_excel(writer, dataframe, sheet_name):
     table = dataframe.drop(columns=["Selecionar"], errors="ignore")
+    table.to_excel(writer, index=False, sheet_name=sheet_name)
+    worksheet = writer.sheets[sheet_name]
+    for column_index, column_name in enumerate(table.columns, start=1):
+        if column_name not in MONETARY_COLUMNS:
+            continue
+        for row_index in range(2, len(table) + 2):
+            worksheet.cell(row=row_index, column=column_index).number_format = EXCEL_BRL_NUMBER_FORMAT
+
+
+def dataframe_to_excel_bytes(dataframe, sheet_name="Dados"):
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        table.to_excel(writer, index=False, sheet_name=sheet_name)
+        write_dataframe_to_excel(writer, dataframe, sheet_name)
     return buffer.getvalue()
 
 
