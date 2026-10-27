@@ -37,6 +37,13 @@ def _parse_log_timestamp(value):
     return timestamp.tz_convert(SAO_PAULO_TIMEZONE)
 
 
+def format_timestamp_sao_paulo(value):
+    timestamp = _parse_log_timestamp(value)
+    if pd.isna(timestamp):
+        return "-"
+    return timestamp.strftime("%d/%m/%Y %H:%M:%S")
+
+
 def menu_options_for_profile(profile):
     if profile == "ADMIN":
         return [
@@ -46,6 +53,7 @@ def menu_options_for_profile(profile):
             "🏛 Regras Fiscais",
             "🧾 Log",
             "👤 Usuários",
+            "⚙️ Configurações",
             "🛠️ Ferramentas Administrativas",
         ]
     if profile == "VENDEDORA":
@@ -55,7 +63,7 @@ def menu_options_for_profile(profile):
     return ["📄 Análise de Pedidos KSB"]
 
 
-def build_outdated_prices_table(material_rows, today):
+def build_outdated_prices_table(material_rows, today, review_days=90):
     records = []
     for row in material_rows:
         values = dict(zip(MATERIAL_COLUMNS, row))
@@ -63,7 +71,9 @@ def build_outdated_prices_table(material_rows, today):
             price = float(values.get("Preço Unitário Líquido") or 0)
         except (TypeError, ValueError):
             price = 0.0
-        if price <= 0 or not is_price_outdated(values.get("Última Revisão"), today):
+        if price <= 0 or not is_price_outdated(
+            values.get("Última Revisão"), today, max_age_days=review_days
+        ):
             continue
 
         parsed_date = parse_review_date(values.get("Última Revisão"))
