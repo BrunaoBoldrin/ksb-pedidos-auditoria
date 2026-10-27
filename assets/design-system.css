@@ -17,7 +17,10 @@ html, body, [data-testid="stApp"] {
 [data-testid="stSidebar"] button:hover { color: white; border-color: #C7DEFF; background: #ffffff1c; }
 [data-testid="stSidebar"] [data-testid="stButton"] button {
   min-height: 48px; width: 100%; border-radius: 10px; padding: 12px 14px;
-  justify-content: flex-start; text-align: left; transition: background var(--motion-fast);
+  align-items: center; justify-content: flex-start; text-align: left; transition: background var(--motion-fast);
+}
+[data-testid="stSidebar"] [data-testid="stButton"] button > div {
+  width: 100%; align-items: center; justify-content: flex-start;
 }
 [data-testid="stSidebar"] [data-testid="stButton"] button p { text-align: left; color: white; }
 [data-testid="stSidebar"] [data-testid="stButton"] button[kind="primary"] {
@@ -90,7 +93,7 @@ html, body, [data-testid="stApp"] {
 [data-testid="stMetricLabel"] p { white-space: normal; overflow-wrap: anywhere; }
 [data-testid="stTabs"] [role="tab"] { min-height: 44px; padding: 10px 18px; border-radius: 8px 8px 0 0; }
 [data-testid="stTabs"] [role="tab"][aria-selected="true"] { background: #EAF1FC; color: var(--brand-primary); font-weight: 700; }
-[data-testid="stDataFrame"], [data-testid="stDataEditor"] { border-radius: 12px; max-width: 100%; overflow: auto; }
+[data-testid="stDataFrame"], [data-testid="stDataEditor"] { border-radius: 12px; max-width: 100%; overflow: hidden; }
 :focus-visible { outline: 3px solid var(--brand-primary); outline-offset: 3px; }
 [data-testid="stSidebar"] :focus-visible { outline-color: #C7DEFF; }
 @media (max-width: 1199px) { .ds-result-row { gap: 12px; padding: 16px; grid-template-columns: 1fr 1.4fr; } }

@@ -3,6 +3,7 @@ import pdfplumber
 import pandas as pd
 from database import buscar_material_por_codigo, localizar_regra_fiscal_por_ncm
 from price_rules import is_price_outdated
+from system_settings import normalize_system_settings
 
 from datetime import datetime
 
@@ -160,7 +161,8 @@ def extract_order_number(pdf_path):
     return match.group(1) if match else ""
 
 
-def processar_pdf(PDF_PATH, price_reference_date=None):
+def processar_pdf(PDF_PATH, price_reference_date=None, settings=None):
+    settings = normalize_system_settings(settings)
     dados_csv = []
     analises = []
 
@@ -471,7 +473,7 @@ def processar_pdf(PDF_PATH, price_reference_date=None):
         diferenca_assinada = round(valor_calculado - valor_total_float, 2) if regra_fiscal else 0.0
         diferenca = abs(diferenca_assinada)
 
-        if regra_fiscal and diferenca > 1:
+        if regra_fiscal and diferenca > settings.fiscal_difference_tolerance:
             divergencias.append(
                 f"Valor divergente (Calculado: {valor_calculado} | Pedido: {valor_total_float} | Diferença: {round(diferenca, 2)})"
             )
@@ -521,14 +523,18 @@ def processar_pdf(PDF_PATH, price_reference_date=None):
                     "PREÇO NÃO CADASTRADO",
                     f"Informe o Preço Unitário Líquido no cadastro do material {codigo_material}.",
                 )
-            elif is_price_outdated(data_ultima_revisao_preco, price_reference_date):
+            elif is_price_outdated(
+                data_ultima_revisao_preco,
+                price_reference_date,
+                max_age_days=settings.price_review_days,
+            ):
                 status_comercial = "PENDENTE - REVISÃO DE PREÇO"
                 diagnostico_comercial = montar_diagnostico(
                     "PREÇO NECESSITA DE REVISÃO: ATUALIZE O VALOR DO ITEM.",
                     f"Última revisão: {data_ultima_revisao_preco or '-'} | Revisado por: {usuario_ultima_revisao_preco or '-'}.",
                     f"Pedido KSB: {formatar_moeda_texto(preco_pedido_ksb)} | Cadastrado: {formatar_moeda_texto(preco_cadastrado)} | Diferença: {formatar_moeda_texto(diferenca_preco)}.",
                 )
-            elif abs(diferenca_preco) > 0.01:
+            elif abs(diferenca_preco) > settings.price_difference_tolerance:
                 status_comercial = "PENDENTE - REVISÃO DE PREÇO"
                 diagnostico_comercial = montar_diagnostico(
                     "PREÇO DIVERGENTE",

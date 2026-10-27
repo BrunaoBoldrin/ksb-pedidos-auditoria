@@ -1,6 +1,7 @@
 """Real Streamlit screens with external database I/O isolated from tests."""
 
 import hashlib
+import re
 import tempfile
 import unittest
 from contextlib import ExitStack, chdir
@@ -12,6 +13,7 @@ from streamlit.testing.v1 import AppTest
 
 import database
 import parser
+from system_settings import SystemSettings
 
 
 APP = Path(__file__).resolve().parents[1] / "app.py"
@@ -24,6 +26,20 @@ class AppDesignTests(unittest.TestCase):
         for name in ("listar_materiais_completo", "listar_regras_fiscais", "listar_usuarios",
                      "listar_logs_auditorias", "listar_logs_revisoes_preco"):
             self.external.enter_context(patch.object(database, name, return_value=[]))
+        self.settings_loader = self.external.enter_context(
+            patch.object(database, "buscar_configuracoes_sistema", return_value=SystemSettings())
+        )
+        self.external.enter_context(
+            patch.object(database, "listar_metadados_configuracoes", return_value={})
+        )
+        self.saved_settings = []
+        self.external.enter_context(
+            patch.object(
+                database,
+                "salvar_configuracoes_sistema",
+                side_effect=lambda settings, user: self.saved_settings.append((settings, user)),
+            )
+        )
         self.writes = self.external.enter_context(patch.object(
             database, "registrar_auditoria_pedido",
             side_effect=AssertionError("A presentation rerun must not write an audit"),
@@ -94,13 +110,14 @@ class AppDesignTests(unittest.TestCase):
         self.writes.side_effect = None
         with tempfile.TemporaryDirectory() as directory, chdir(directory), patch.object(
             parser, "processar_pdf", return_value=results
-        ), patch.object(parser, "extract_order_number", return_value="4501"), patch.object(
+        ) as processor, patch.object(parser, "extract_order_number", return_value="4501"), patch.object(
             database, "pedido_ja_aprovado", return_value=False
         ):
             next(b for b in at.button if b.label == "Processar pedidos").click().run()
             self.assertEqual(len(at.exception), 0)
             self.assertEqual(self.writes.call_count, 1)
             self.assertEqual(self.writes.call_args.kwargs["usuario"], "Usuário de teste")
+            self.assertEqual(processor.call_args.kwargs["settings"], SystemSettings())
             self.assertIsNotNone(at.session_state["resultados_processados"])
             # A download's default rerun uses the same presentation path.
             at.run()
@@ -145,10 +162,11 @@ class AppDesignTests(unittest.TestCase):
             "🏛 Regras Fiscais": "Regras Fiscais",
             "🧾 Log": "Log",
             "👤 Usuários": "Usuários",
+            "⚙️ Configurações": "Configurações",
             "🛠️ Ferramentas Administrativas": "Ferramentas Administrativas",
         }
         expected = {
-            "ADMIN": ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados", "💰 Revisão de Preços", "🏛 Regras Fiscais", "🧾 Log", "👤 Usuários", "🛠️ Ferramentas Administrativas"],
+            "ADMIN": ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados", "💰 Revisão de Preços", "🏛 Regras Fiscais", "🧾 Log", "👤 Usuários", "⚙️ Configurações", "🛠️ Ferramentas Administrativas"],
             "VENDEDORA": ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados"],
             "PROCESSISTA": ["📦 Itens Cadastrados"],
             "OUTRO": ["📄 Análise de Pedidos KSB"],
@@ -166,6 +184,106 @@ class AppDesignTests(unittest.TestCase):
                 at.run()
                 self.assertEqual(at.session_state["pagina_atual"], menus[-1])
         self.assertEqual(self.writes.call_count, 0)
+
+    def test_admin_can_edit_and_save_system_settings(self):
+        at = self.app()
+        at.sidebar.button(key="nav_⚙️ Configurações").click().run()
+
+        inputs = {widget.label: widget for widget in at.number_input}
+        self.assertEqual(inputs["Validade da revisão de preço (dias)"].value, 90)
+        self.assertEqual(inputs["Tolerância de diferença de preço (R$)"].value, 0.01)
+        self.assertEqual(inputs["Tolerância de diferença fiscal (R$)"].value, 1.0)
+
+        inputs["Validade da revisão de preço (dias)"].set_value(120)
+        inputs["Tolerância de diferença de preço (R$)"].set_value(0.5)
+        inputs["Tolerância de diferença fiscal (R$)"].set_value(2.0)
+        next(button for button in at.button if button.label == "💾 Salvar configurações").click().run()
+
+        self.assertEqual(
+            self.saved_settings,
+            [(SystemSettings(120, 0.5, 2.0), "Usuário de teste")],
+        )
+
+    def test_native_tables_do_not_create_a_second_scroll_container(self):
+        at = self.app()
+        injected_styles = "\n".join(
+            markdown.value
+            for markdown in at.markdown
+            if "stDataFrame" in markdown.value or "stDataEditor" in markdown.value
+        )
+
+        table_rule = re.search(
+            r'\[data-testid="stDataFrame"\].*?\{(?P<declarations>[^}]*)\}',
+            injected_styles,
+            flags=re.DOTALL,
+        )
+
+        self.assertIsNotNone(table_rule)
+        self.assertRegex(table_rule.group("declarations"), r"overflow\s*:\s*hidden\s*;")
+
+    def test_table_pages_offer_excel_downloads(self):
+        material = (
+            "001492536", "PROTETOR ACOPL", "LATÃO", "BRN66/C08", "7419.80.90",
+            "PEÇAS", "DI039501430000", "DI039503930000", 405.62,
+            "2026-01-01", "Administrador",
+        )
+        with patch.object(database, "listar_materiais_completo", return_value=[material]), patch.object(
+            database,
+            "listar_logs_auditorias",
+            return_value=[("4501", "PRIMEIRA ANÁLISE", "OK", "OK", "Ana", "2026-10-23T17:44:51+00:00", False, False, "pedido.pdf")],
+        ), patch.object(
+            database,
+            "listar_logs_revisoes_preco",
+            return_value=[("001492536", "PROTETOR ACOPL", 400.0, 405.62, "Ana", "2026-10-23T17:44:51+00:00", "ALTERAÇÃO PELO SISTEMA")],
+        ), patch.object(
+            database,
+            "listar_regras_fiscais",
+            return_value=[(1, "7419.80.90", 12.0, 3.25, "LATÃO", 1)],
+        ), patch.object(
+            database,
+            "listar_usuarios",
+            return_value=[(1, "Administrador", "admin", "ADMIN", 1)],
+        ):
+            at = self.app()
+            expected_by_menu = {
+                "📦 Itens Cadastrados": ["📥 Baixar itens em Excel"],
+                "💰 Revisão de Preços": ["📥 Baixar preços desatualizados em Excel"],
+                "🧾 Log": ["📥 Baixar auditorias em Excel", "📥 Baixar revisões de preços em Excel"],
+                "🏛 Regras Fiscais": ["📥 Baixar regras fiscais em Excel"],
+                "👤 Usuários": ["📥 Baixar usuários em Excel"],
+            }
+
+            for menu, expected_labels in expected_by_menu.items():
+                with self.subTest(menu=menu):
+                    at.sidebar.button(key=f"nav_{menu}").click().run()
+                    labels = [button.label for button in at.get("download_button")]
+                    for label in expected_labels:
+                        self.assertIn(label, labels)
+
+    def test_price_tables_display_brazilian_currency(self):
+        material = (
+            "001492536", "PROTETOR ACOPL", "LATÃO", "BRN66/C08", "7419.80.90",
+            "PEÇAS", "DI039501430000", "DI039503930000", 1234.5,
+            "2026-01-01", "Administrador",
+        )
+        price_log = (
+            "001492536", "PROTETOR ACOPL", 1000.0, 1234.5, "Ana",
+            "2026-10-23T17:44:51+00:00", "ALTERAÇÃO PELO SISTEMA",
+        )
+        with patch.object(database, "listar_materiais_completo", return_value=[material]), patch.object(
+            database, "listar_logs_revisoes_preco", return_value=[price_log]
+        ):
+            at = self.app()
+
+            at.sidebar.button(key="nav_📦 Itens Cadastrados").click().run()
+            self.assertEqual(at.dataframe[0].value.loc[0, "Preço Unitário Líquido"], "R$ 1.234,50")
+
+            at.sidebar.button(key="nav_💰 Revisão de Preços").click().run()
+            self.assertEqual(at.dataframe[0].value.loc[0, "Preço Unitário Líquido"], "R$ 1.234,50")
+
+            at.sidebar.button(key="nav_🧾 Log").click().run()
+            self.assertEqual(at.dataframe[1].value.loc[0, "Preço Anterior"], "R$ 1.000,00")
+            self.assertEqual(at.dataframe[1].value.loc[0, "Preço Novo"], "R$ 1.234,50")
 
     def test_reaudit_stays_disabled_until_both_literal_confirmations(self):
         at = self.app()

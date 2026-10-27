@@ -1,7 +1,11 @@
 import unittest
 from html.parser import HTMLParser
+from io import BytesIO
 
 import pandas as pd
+from openpyxl import load_workbook
+
+import ui_components
 
 from ui_components import (
     cabecalho_item_html,
@@ -77,6 +81,57 @@ class PresentationTests(unittest.TestCase):
         self.assertIn("br", reader.tags)
         self.assertIn("PREÇO NECESSITA DE REVISÃO: ATUALIZE O VALOR DO ITEM.", "".join(reader.text))
         self.assertIn("Última revisão: 22/07/2026", "".join(reader.text))
+
+    def test_excel_export_contains_business_columns_and_preserves_text_codes(self):
+        exporter = getattr(ui_components, "dataframe_to_excel_bytes", None)
+        self.assertTrue(callable(exporter), "A exportação Excel das tabelas deve estar disponível")
+        frame = pd.DataFrame(
+            [{"Selecionar": False, "Código Material": "001492536", "Descrição": "PROTETOR ACOPL"}]
+        )
+
+        workbook = load_workbook(BytesIO(exporter(frame, "Itens")), read_only=True)
+        rows = list(workbook["Itens"].values)
+
+        self.assertEqual(rows[0], ("Código Material", "Descrição"))
+        self.assertEqual(rows[1], ("001492536", "PROTETOR ACOPL"))
+
+    def test_brazilian_currency_format_uses_symbol_thousands_and_decimal_comma(self):
+        formatter = getattr(ui_components, "formatar_moeda_brl", None)
+        self.assertTrue(callable(formatter), "A formatação monetária brasileira deve estar disponível")
+        self.assertEqual(formatter(1234.5), "R$ 1.234,50")
+        self.assertEqual(formatter(-98.7), "R$ -98,70")
+        self.assertEqual(formatter("1.234,56"), "R$ 1.234,56")
+        self.assertEqual(formatter(None), "")
+
+    def test_currency_columns_are_formatted_without_mutating_business_data(self):
+        frame = pd.DataFrame([
+            {
+                "Código Material": "001492536",
+                "Preço Unitário Líquido": 1234.5,
+                "Preço Anterior": 1000,
+                "Quantidade": 2,
+            }
+        ])
+
+        format_columns = getattr(ui_components, "format_currency_columns", None)
+        self.assertTrue(callable(format_columns), "As tabelas devem formatar suas colunas monetárias")
+        displayed = format_columns(frame)
+
+        self.assertEqual(displayed.loc[0, "Preço Unitário Líquido"], "R$ 1.234,50")
+        self.assertEqual(displayed.loc[0, "Preço Anterior"], "R$ 1.000,00")
+        self.assertEqual(displayed.loc[0, "Quantidade"], 2)
+        self.assertEqual(frame.loc[0, "Preço Unitário Líquido"], 1234.5)
+
+    def test_excel_keeps_price_numeric_and_applies_brazilian_currency_style(self):
+        frame = pd.DataFrame([
+            {"Código Material": "001492536", "Preço Unitário Líquido": 1234.5}
+        ])
+
+        workbook = load_workbook(BytesIO(ui_components.dataframe_to_excel_bytes(frame, "Itens")))
+        price_cell = workbook["Itens"]["B2"]
+
+        self.assertEqual(price_cell.value, 1234.5)
+        self.assertEqual(price_cell.number_format, '[$R$-pt-BR] #,##0.00')
 
 
 if __name__ == "__main__":

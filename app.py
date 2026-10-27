@@ -14,6 +14,7 @@ from database import (
     atualizar_material,
     atualizar_regra_fiscal,
     buscar_material,
+    buscar_configuracoes_sistema,
     buscar_usuario_login,
     conectar,
     excluir_material,
@@ -25,27 +26,35 @@ from database import (
     listar_logs_auditorias,
     listar_logs_revisoes_preco,
     listar_materiais_completo,
+    listar_metadados_configuracoes,
     listar_regras_fiscais,
     listar_usuarios,
     pedido_ja_aprovado,
     registrar_auditoria_pedido,
+    salvar_configuracoes_sistema,
 )
 from order_workflow import approved_orders_in_batch, process_uploaded_orders, upload_fingerprints
 from parser import calcular_divisor_base, extract_order_number, processar_pdf
+from system_settings import SystemSettings
 from ui_components import (
     apply_design,
     cabecalho_item_html,
+    dataframe_to_excel_bytes,
+    format_currency_columns,
+    formatar_moeda_brl,
     filtrar_itens,
     metric_html,
     page_header,
     painel_diagnostico_html,
     profile_html,
     render_summary,
+    write_dataframe_to_excel,
 )
 from ui_rules import (
     build_outdated_prices_table,
     filter_audit_log,
     filter_price_log,
+    format_timestamp_sao_paulo,
     menu_options_for_profile,
 )
 
@@ -53,12 +62,21 @@ st.set_page_config(page_title="Analisador de Pedidos", page_icon="📄", layout=
 
 apply_design()
 
+EXCEL_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def botao_download_excel(dataframe, label, file_name, sheet_name, key):
+    st.download_button(
+        label,
+        dataframe_to_excel_bytes(dataframe, sheet_name),
+        file_name,
+        EXCEL_MIME_TYPE,
+        key=key,
+    )
+
 
 def formatar_moeda(valor):
-    try:
-        return f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except Exception:
-        return "-"
+    return formatar_moeda_brl(valor) or "-"
 
 
 def valor_texto(linha, coluna, padrao="-"):
@@ -513,7 +531,7 @@ def exibir_resultados_processamento(resultados):
     )
     st.divider()
     st.subheader("📦 Dados Extraídos")
-    st.dataframe(df_final, use_container_width=True)
+    st.dataframe(format_currency_columns(df_final), use_container_width=True)
     st.download_button(
         "📥 Download CSV",
         df_final.to_csv(index=False, sep=";").encode("utf-8-sig"),
@@ -522,8 +540,8 @@ def exibir_resultados_processamento(resultados):
     )
     excel_buffer = BytesIO()
     with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-        df_final.to_excel(writer, index=False, sheet_name="Pedidos")
-        df_analise_final.to_excel(writer, index=False, sheet_name="Auditoria")
+        write_dataframe_to_excel(writer, df_final, "Pedidos")
+        write_dataframe_to_excel(writer, df_analise_final, "Auditoria")
     st.download_button(
         "📥 Download Excel",
         excel_buffer.getvalue(),
@@ -533,7 +551,9 @@ def exibir_resultados_processamento(resultados):
     st.success("Processamento concluído com sucesso!")
 
 
-def executar_processamento(uploaded_files, pedidos_reavaliados, confirmacoes, usuario):
+def executar_processamento(
+    uploaded_files, pedidos_reavaliados, confirmacoes, usuario, configuracoes
+):
     st.session_state.resultados_processados = None
     st.session_state.assinatura_resultados = None
     progresso = st.progress(0)
@@ -543,7 +563,7 @@ def executar_processamento(uploaded_files, pedidos_reavaliados, confirmacoes, us
             usuario,
             pedidos_reavaliados,
             confirmacoes,
-            processar_pdf,
+            lambda caminho: processar_pdf(caminho, settings=configuracoes),
             registrar_auditoria_pedido,
         )
     progresso.progress(100)
@@ -567,7 +587,7 @@ if st.session_state.usuario_logado is None:
     marca_col, login_col = st.columns([1.15, 1], gap="large")
     with marca_col:
         st.markdown(
-            '<section class="ds-login-hero"><div class="ds-brand"><strong>pedidos</strong>'
+            '<section class="ds-login-hero"><div class="ds-brand"><strong>Pedidos</strong>'
             '<span>METAIS GLÓRIA · AUDITORIA KSB</span></div>'
             '<h1>Analisador de<br>Pedidos KSB</h1>'
             '<p>Auditoria fiscal e análise comercial em uma única área de trabalho.</p></section>',
@@ -591,6 +611,7 @@ if st.session_state.usuario_logado is None:
 
 perfil = st.session_state.perfil_usuario
 usuario_revisao_atual = st.session_state.nome_usuario or st.session_state.usuario_logado
+configuracoes_sistema = buscar_configuracoes_sistema()
 opcoes_menu = menu_options_for_profile(perfil)
 
 if st.session_state.get("pagina_atual") not in opcoes_menu:
@@ -602,7 +623,7 @@ def selecionar_pagina(pagina):
 
 
 with st.sidebar:
-    st.markdown('<div class="ds-brand"><strong>pedidos</strong><span>METAIS GLÓRIA · KSB</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="ds-brand"><strong>Pedidos</strong><span>METAIS GLÓRIA · KSB</span></div>', unsafe_allow_html=True)
     st.markdown(profile_html(st.session_state.nome_usuario, perfil), unsafe_allow_html=True)
     for opcao in opcoes_menu:
         selecionado = st.session_state.pagina_atual == opcao
@@ -681,6 +702,7 @@ if menu == "📄 Análise de Pedidos KSB":
                         pedidos_pendentes,
                         (confirmou_auditoria, confirmou_implantacao),
                         usuario_revisao_atual,
+                        configuracoes_sistema,
                     )
                     st.session_state.pedidos_reavaliacao_pendentes = []
                     st.session_state.arquivos_reavaliacao_pendentes = []
@@ -705,6 +727,7 @@ if menu == "📄 Análise de Pedidos KSB":
                         [],
                         (False, False),
                         usuario_revisao_atual,
+                        configuracoes_sistema,
                     )
             except Exception as erro:
                 st.error("Não foi possível processar os pedidos.")
@@ -742,9 +765,18 @@ elif menu == "📦 Itens Cadastrados":
         st.info("Nenhum item cadastrado.")
         materiais_selecionados = pd.DataFrame()
     else:
-        df_materiais.insert(0, "Selecionar", False)
-        tabela_materiais = st.data_editor(df_materiais, use_container_width=True, hide_index=True)
-        materiais_selecionados = tabela_materiais[tabela_materiais["Selecionar"] == True]
+        tabela_materiais_exibicao = format_currency_columns(df_materiais)
+        tabela_materiais_exibicao.insert(0, "Selecionar", False)
+        tabela_materiais = st.data_editor(tabela_materiais_exibicao, use_container_width=True, hide_index=True)
+        indices_selecionados = tabela_materiais.index[tabela_materiais["Selecionar"] == True]
+        materiais_selecionados = df_materiais.loc[indices_selecionados]
+        botao_download_excel(
+            df_materiais,
+            "📥 Baixar itens em Excel",
+            "itens_cadastrados.xlsx",
+            "Itens",
+            "download_excel_itens",
+        )
 
     st.divider()
     col_importar, col_novo, col_editar, col_excluir = st.columns(4)
@@ -801,7 +833,7 @@ elif menu == "📦 Itens Cadastrados":
                     st.warning("Nenhuma linha válida foi encontrada para importação.")
                 else:
                     st.success(f"Arquivo lido com {len(df_importacao)} material(is) válido(s).")
-                    st.dataframe(df_importacao.head(20), use_container_width=True)
+                    st.dataframe(format_currency_columns(df_importacao.head(20)), use_container_width=True)
                     st.caption("Pré-visualização das primeiras 20 linhas. A importação considera todas as linhas válidas.")
                     if st.button("🚀 Importar Materiais"):
                         inseridos = 0
@@ -897,13 +929,24 @@ elif menu == "💰 Revisão de Preços":
     df_precos_desatualizados = build_outdated_prices_table(
         listar_materiais_completo(),
         date.today(),
+        review_days=configuracoes_sistema.price_review_days,
     )
     st.markdown(metric_html("Produtos com preço desatualizado", len(df_precos_desatualizados), "Preços cadastrados com revisão pendente", True), unsafe_allow_html=True)
     if df_precos_desatualizados.empty:
         st.success("Todos os produtos com preço cadastrado estão dentro do prazo de revisão.")
     else:
-        st.caption("A lista considera preços sem data válida ou cuja última revisão ocorreu há mais de três meses.")
-        st.dataframe(df_precos_desatualizados, use_container_width=True, hide_index=True)
+        st.caption(
+            "A lista considera preços sem data válida ou cuja última revisão ocorreu "
+            f"há mais de {configuracoes_sistema.price_review_days} dias."
+        )
+        st.dataframe(format_currency_columns(df_precos_desatualizados), use_container_width=True, hide_index=True)
+        botao_download_excel(
+            df_precos_desatualizados,
+            "📥 Baixar preços desatualizados em Excel",
+            "precos_desatualizados.xlsx",
+            "Preços desatualizados",
+            "download_excel_precos_desatualizados",
+        )
 
 elif menu == "🧾 Log":
     page_header("Log", "Rastreabilidade das auditorias de pedidos e das alterações reais de preço.")
@@ -980,6 +1023,13 @@ elif menu == "🧾 Log":
             fim_auditoria,
         )
         st.dataframe(auditorias_filtradas, use_container_width=True, hide_index=True)
+        botao_download_excel(
+            auditorias_filtradas,
+            "📥 Baixar auditorias em Excel",
+            "auditorias_pedidos.xlsx",
+            "Auditorias",
+            "download_excel_auditorias",
+        )
 
     with aba_precos:
         busca_col, usuario_col = st.columns([2, 1])
@@ -1021,7 +1071,14 @@ elif menu == "🧾 Log":
             inicio_preco,
             fim_preco,
         )
-        st.dataframe(precos_filtrados, use_container_width=True, hide_index=True)
+        st.dataframe(format_currency_columns(precos_filtrados), use_container_width=True, hide_index=True)
+        botao_download_excel(
+            precos_filtrados,
+            "📥 Baixar revisões de preços em Excel",
+            "revisoes_precos.xlsx",
+            "Revisões de preços",
+            "download_excel_revisoes_precos",
+        )
 
 elif menu == "🏛 Regras Fiscais":
     page_header("Regras Fiscais", "Consulte os critérios por NCM e mantenha as alíquotas cadastradas.")
@@ -1039,6 +1096,13 @@ elif menu == "🏛 Regras Fiscais":
         df_regras.insert(0, "Selecionar", False)
         tabela_regras = st.data_editor(df_regras, use_container_width=True, hide_index=True)
         regras_selecionadas = tabela_regras[tabela_regras["Selecionar"] == True]
+        botao_download_excel(
+            df_regras,
+            "📥 Baixar regras fiscais em Excel",
+            "regras_fiscais.xlsx",
+            "Regras fiscais",
+            "download_excel_regras_fiscais",
+        )
     st.divider()
     col_nova, col_editar, col_excluir = st.columns(3)
     with col_nova:
@@ -1143,6 +1207,13 @@ elif menu == "👤 Usuários":
         df_usuarios.insert(0, "Selecionar", False)
         tabela_usuarios = st.data_editor(df_usuarios, use_container_width=True, hide_index=True, disabled=["ID", "Nome", "Usuário", "Perfil", "Status", "Ativo"])
         usuarios_selecionados = tabela_usuarios[tabela_usuarios["Selecionar"] == True]
+        botao_download_excel(
+            df_usuarios,
+            "📥 Baixar usuários em Excel",
+            "usuarios.xlsx",
+            "Usuários",
+            "download_excel_usuarios",
+        )
     st.divider(); c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         if st.button("➕ Novo Usuário"):
@@ -1211,6 +1282,68 @@ elif menu == "👤 Usuários":
             if st.button("✅ Confirmar Exclusão"): excluir_usuario(int(u["ID"])); st.session_state.modo_usuario = None; st.session_state.usuario_em_edicao = None; st.rerun()
         with c2:
             if st.button("❌ Cancelar Exclusão"): st.session_state.modo_usuario = None; st.session_state.usuario_em_edicao = None; st.rerun()
+
+elif menu == "⚙️ Configurações":
+    page_header(
+        "Configurações",
+        "Ajuste os critérios gerais usados pelo diagnóstico. Acesso exclusivo do Administrador.",
+    )
+    if perfil != "ADMIN":
+        st.error("Acesso negado.")
+        st.stop()
+
+    metadados_configuracoes = listar_metadados_configuracoes()
+    if st.session_state.pop("configuracoes_salvas", False):
+        st.success("Configurações salvas. Os novos critérios já serão usados nas próximas análises.")
+
+    def legenda_configuracao(chave):
+        metadado = metadados_configuracoes.get(chave, {})
+        usuario = metadado.get("usuario") or "SISTEMA"
+        data_hora = format_timestamp_sao_paulo(metadado.get("data_hora"))
+        return f"Última alteração: {usuario} em {data_hora} (horário de São Paulo)."
+
+    with st.form("form_configuracoes_sistema"):
+        prazo_revisao = st.number_input(
+            "Validade da revisão de preço (dias)",
+            min_value=1,
+            max_value=3650,
+            value=configuracoes_sistema.price_review_days,
+            step=1,
+            help="Após este prazo, o diagnóstico exigirá uma nova revisão do preço.",
+        )
+        st.caption(legenda_configuracao("price_review_days"))
+
+        tolerancia_preco = st.number_input(
+            "Tolerância de diferença de preço (R$)",
+            min_value=0.0,
+            max_value=1_000_000.0,
+            value=configuracoes_sistema.price_difference_tolerance,
+            step=0.01,
+            format="%.2f",
+            help="Diferenças iguais ou inferiores a este valor são aceitas na análise comercial.",
+        )
+        st.caption(legenda_configuracao("price_difference_tolerance"))
+
+        tolerancia_fiscal = st.number_input(
+            "Tolerância de diferença fiscal (R$)",
+            min_value=0.0,
+            max_value=1_000_000.0,
+            value=configuracoes_sistema.fiscal_difference_tolerance,
+            step=0.01,
+            format="%.2f",
+            help="Diferenças iguais ou inferiores a este valor são aceitas na análise fiscal.",
+        )
+        st.caption(legenda_configuracao("fiscal_difference_tolerance"))
+
+        if st.form_submit_button("💾 Salvar configurações", type="primary"):
+            novas_configuracoes = SystemSettings(
+                price_review_days=int(prazo_revisao),
+                price_difference_tolerance=float(tolerancia_preco),
+                fiscal_difference_tolerance=float(tolerancia_fiscal),
+            )
+            salvar_configuracoes_sistema(novas_configuracoes, usuario_revisao_atual)
+            st.session_state.configuracoes_salvas = True
+            st.rerun()
 
 elif menu == "🛠️ Ferramentas Administrativas":
     page_header("Ferramentas Administrativas", "Manutenção do sistema. Acesso exclusivo do Administrador.")

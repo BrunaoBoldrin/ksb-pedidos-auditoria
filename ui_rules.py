@@ -1,5 +1,7 @@
 """Transformações puras usadas pelas telas administrativas Streamlit."""
 
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 
 from price_rules import is_price_outdated, parse_review_date
@@ -19,6 +21,28 @@ MATERIAL_COLUMNS = [
     "Usuário Última Revisão",
 ]
 
+SAO_PAULO_TIMEZONE = ZoneInfo("America/Sao_Paulo")
+
+
+def _parse_log_timestamp(value):
+    try:
+        timestamp = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        return pd.NaT
+
+    if pd.isna(timestamp):
+        return pd.NaT
+    if timestamp.tzinfo is None:
+        return timestamp.tz_localize(SAO_PAULO_TIMEZONE)
+    return timestamp.tz_convert(SAO_PAULO_TIMEZONE)
+
+
+def format_timestamp_sao_paulo(value):
+    timestamp = _parse_log_timestamp(value)
+    if pd.isna(timestamp):
+        return "-"
+    return timestamp.strftime("%d/%m/%Y %H:%M:%S")
+
 
 def menu_options_for_profile(profile):
     if profile == "ADMIN":
@@ -29,6 +53,7 @@ def menu_options_for_profile(profile):
             "🏛 Regras Fiscais",
             "🧾 Log",
             "👤 Usuários",
+            "⚙️ Configurações",
             "🛠️ Ferramentas Administrativas",
         ]
     if profile == "VENDEDORA":
@@ -38,7 +63,7 @@ def menu_options_for_profile(profile):
     return ["📄 Análise de Pedidos KSB"]
 
 
-def build_outdated_prices_table(material_rows, today):
+def build_outdated_prices_table(material_rows, today, review_days=90):
     records = []
     for row in material_rows:
         values = dict(zip(MATERIAL_COLUMNS, row))
@@ -46,7 +71,9 @@ def build_outdated_prices_table(material_rows, today):
             price = float(values.get("Preço Unitário Líquido") or 0)
         except (TypeError, ValueError):
             price = 0.0
-        if price <= 0 or not is_price_outdated(values.get("Última Revisão"), today):
+        if price <= 0 or not is_price_outdated(
+            values.get("Última Revisão"), today, max_age_days=review_days
+        ):
             continue
 
         parsed_date = parse_review_date(values.get("Última Revisão"))
@@ -106,12 +133,26 @@ def _filter_log(dataframe, query, user, start, end, searchable_columns):
         result = result[result["Usuário"].astype(str) == user]
 
     if "Data/Hora" in result.columns:
-        timestamps = pd.to_datetime(result["Data/Hora"], errors="coerce")
+        timestamps = result["Data/Hora"].map(_parse_log_timestamp)
         if start is not None:
-            result = result[timestamps.dt.date >= start]
-            timestamps = pd.to_datetime(result["Data/Hora"], errors="coerce")
+            result = result[
+                timestamps.map(
+                    lambda timestamp: not pd.isna(timestamp) and timestamp.date() >= start
+                )
+            ]
         if end is not None:
-            result = result[timestamps.dt.date <= end]
+            result = result[
+                timestamps.map(
+                    lambda timestamp: not pd.isna(timestamp) and timestamp.date() <= end
+                )
+            ]
+
+        result = result.copy()
+        result["Data/Hora"] = timestamps.loc[result.index].map(
+            lambda timestamp: ""
+            if pd.isna(timestamp)
+            else timestamp.strftime("%d/%m/%Y %H:%M:%S")
+        )
 
     return result.reset_index(drop=True)
 
