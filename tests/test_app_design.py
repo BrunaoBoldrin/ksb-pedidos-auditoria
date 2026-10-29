@@ -13,6 +13,7 @@ from streamlit.testing.v1 import AppTest
 
 import database
 import parser
+import ui_components
 from system_settings import SystemSettings
 
 
@@ -246,7 +247,7 @@ class AppDesignTests(unittest.TestCase):
         ):
             at = self.app()
             expected_by_menu = {
-                "📦 Itens Cadastrados": ["📥 Baixar itens em Excel"],
+                "📦 Itens Cadastrados": ["📥 Baixar banco completo de itens em Excel"],
                 "💰 Revisão de Preços": ["📥 Baixar preços desatualizados em Excel"],
                 "🧾 Log": ["📥 Baixar auditorias em Excel", "📥 Baixar revisões de preços em Excel"],
                 "🏛 Regras Fiscais": ["📥 Baixar regras fiscais em Excel"],
@@ -259,6 +260,33 @@ class AppDesignTests(unittest.TestCase):
                     labels = [button.label for button in at.get("download_button")]
                     for label in expected_labels:
                         self.assertIn(label, labels)
+
+    def test_items_download_uses_the_complete_database_not_the_300_row_preview(self):
+        materials = [
+            (
+                f"{index:09d}", f"Material {index}", "AÇO", "NORMA", "0000.00.00",
+                "PEÇAS", f"J{index:09d}", f"V{index:09d}", float(index),
+                "2026-01-01", "Administrador",
+            )
+            for index in range(301)
+        ]
+        real_exporter = ui_components.dataframe_to_excel_bytes
+
+        with patch.object(database, "listar_materiais_completo", return_value=materials), patch.object(
+            ui_components,
+            "dataframe_to_excel_bytes",
+            wraps=real_exporter,
+        ) as exporter:
+            at = self.app()
+            at.sidebar.button(key="nav_📦 Itens Cadastrados").click().run()
+
+            self.assertEqual(len(at.exception), 0)
+            exported_items = next(
+                call.args[0]
+                for call in exporter.call_args_list
+                if call.args[1] == "Itens"
+            )
+            self.assertEqual(len(exported_items), 301)
 
     def test_price_tables_display_brazilian_currency(self):
         material = (
