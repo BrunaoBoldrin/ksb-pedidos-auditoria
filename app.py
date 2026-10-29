@@ -743,10 +743,11 @@ elif menu == "📦 Itens Cadastrados":
         if chave not in st.session_state:
             st.session_state[chave] = valor
 
-    df_materiais = pd.DataFrame(
+    df_materiais_completo = pd.DataFrame(
         listar_materiais_completo(),
         columns=["Código Material", "Descrição", "Material", "Norma", "NCM", "Unidade", "Código Interno Jundiaí", "Código Interno Várzea", "Preço Unitário Líquido", "Última Revisão", "Usuário Última Revisão"],
     )
+    df_materiais = df_materiais_completo.copy()
 
     filtro_material = st.text_input("Pesquisar material", placeholder="Código, descrição ou código interno...")
     if filtro_material and not df_materiais.empty:
@@ -771,8 +772,8 @@ elif menu == "📦 Itens Cadastrados":
         indices_selecionados = tabela_materiais.index[tabela_materiais["Selecionar"] == True]
         materiais_selecionados = df_materiais.loc[indices_selecionados]
         botao_download_excel(
-            df_materiais,
-            "📥 Baixar itens em Excel",
+            df_materiais_completo,
+            "📥 Baixar banco completo de itens em Excel",
             "itens_cadastrados.xlsx",
             "Itens",
             "download_excel_itens",
