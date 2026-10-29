@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import psycopg2
 
 from audit_rules import summarize_item_statuses
+from system_settings import SystemSettings, normalize_system_settings
 
 _REQUIRED_ENV_VARS = ("DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD")
 
@@ -295,11 +296,86 @@ def inicializar_banco():
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS configuracoes_sistema (
+                chave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL,
+                atualizado_por TEXT,
+                atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        configuracoes_padrao = (
+            ("price_review_days", "90"),
+            ("price_difference_tolerance", "0.01"),
+            ("fiscal_difference_tolerance", "1.0"),
+        )
+        for chave, valor in configuracoes_padrao:
+            cursor.execute(
+                """
+                INSERT INTO configuracoes_sistema (chave, valor, atualizado_por)
+                VALUES (%s, %s, 'SISTEMA')
+                ON CONFLICT (chave) DO NOTHING
+                """,
+                (chave, valor),
+            )
 
     try:
         inserir_usuario("Administrador", "admin", "admin123", "ADMIN")
     except Exception:
         pass
+
+
+def buscar_configuracoes_sistema():
+    with _cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT chave, valor
+            FROM configuracoes_sistema
+            """
+        )
+        return normalize_system_settings(dict(cursor.fetchall()))
+
+
+def salvar_configuracoes_sistema(configuracoes, usuario):
+    if not isinstance(configuracoes, SystemSettings):
+        raise TypeError("configuracoes deve ser uma instância de SystemSettings")
+
+    valores = (
+        ("price_review_days", str(configuracoes.price_review_days)),
+        ("price_difference_tolerance", str(configuracoes.price_difference_tolerance)),
+        ("fiscal_difference_tolerance", str(configuracoes.fiscal_difference_tolerance)),
+    )
+    with _cursor(commit=True) as cursor:
+        for chave, valor in valores:
+            cursor.execute(
+                """
+                INSERT INTO configuracoes_sistema (
+                    chave, valor, atualizado_por, atualizado_em
+                )
+                VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (chave) DO UPDATE
+                SET valor = EXCLUDED.valor,
+                    atualizado_por = EXCLUDED.atualizado_por,
+                    atualizado_em = CURRENT_TIMESTAMP
+                """,
+                (chave, valor, usuario),
+            )
+
+
+def listar_metadados_configuracoes():
+    with _cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT chave, atualizado_por, atualizado_em
+            FROM configuracoes_sistema
+            """
+        )
+        return {
+            chave: {"usuario": usuario or "", "data_hora": data_hora}
+            for chave, usuario, data_hora in cursor.fetchall()
+        }
 
 
 def listar_materiais():

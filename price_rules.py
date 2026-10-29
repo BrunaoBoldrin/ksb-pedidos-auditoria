@@ -1,7 +1,6 @@
 """Regras puras para validade da revisão de preços."""
 
-import calendar
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 
 SUPPORTED_DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d.%m.%Y")
@@ -25,17 +24,9 @@ def parse_review_date(value):
     return None
 
 
-def add_calendar_months(value, months):
-    month_index = value.month - 1 + months
-    year = value.year + month_index // 12
-    month = month_index % 12 + 1
-    day = min(value.day, calendar.monthrange(year, month)[1])
-    return date(year, month, day)
-
-
-def is_price_outdated(value, today=None):
+def is_price_outdated(value, today=None, max_age_days=90):
     review_date = parse_review_date(value)
     if review_date is None:
         return True
     reference_date = today or date.today()
-    return reference_date > add_calendar_months(review_date, 3)
+    return reference_date > review_date + timedelta(days=max_age_days)

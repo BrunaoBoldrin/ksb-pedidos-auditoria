@@ -13,6 +13,7 @@ from streamlit.testing.v1 import AppTest
 
 import database
 import parser
+from system_settings import SystemSettings
 
 
 APP = Path(__file__).resolve().parents[1] / "app.py"
@@ -25,6 +26,20 @@ class AppDesignTests(unittest.TestCase):
         for name in ("listar_materiais_completo", "listar_regras_fiscais", "listar_usuarios",
                      "listar_logs_auditorias", "listar_logs_revisoes_preco"):
             self.external.enter_context(patch.object(database, name, return_value=[]))
+        self.settings_loader = self.external.enter_context(
+            patch.object(database, "buscar_configuracoes_sistema", return_value=SystemSettings())
+        )
+        self.external.enter_context(
+            patch.object(database, "listar_metadados_configuracoes", return_value={})
+        )
+        self.saved_settings = []
+        self.external.enter_context(
+            patch.object(
+                database,
+                "salvar_configuracoes_sistema",
+                side_effect=lambda settings, user: self.saved_settings.append((settings, user)),
+            )
+        )
         self.writes = self.external.enter_context(patch.object(
             database, "registrar_auditoria_pedido",
             side_effect=AssertionError("A presentation rerun must not write an audit"),
@@ -95,13 +110,14 @@ class AppDesignTests(unittest.TestCase):
         self.writes.side_effect = None
         with tempfile.TemporaryDirectory() as directory, chdir(directory), patch.object(
             parser, "processar_pdf", return_value=results
-        ), patch.object(parser, "extract_order_number", return_value="4501"), patch.object(
+        ) as processor, patch.object(parser, "extract_order_number", return_value="4501"), patch.object(
             database, "pedido_ja_aprovado", return_value=False
         ):
             next(b for b in at.button if b.label == "Processar pedidos").click().run()
             self.assertEqual(len(at.exception), 0)
             self.assertEqual(self.writes.call_count, 1)
             self.assertEqual(self.writes.call_args.kwargs["usuario"], "Usuário de teste")
+            self.assertEqual(processor.call_args.kwargs["settings"], SystemSettings())
             self.assertIsNotNone(at.session_state["resultados_processados"])
             # A download's default rerun uses the same presentation path.
             at.run()
@@ -146,10 +162,11 @@ class AppDesignTests(unittest.TestCase):
             "🏛 Regras Fiscais": "Regras Fiscais",
             "🧾 Log": "Log",
             "👤 Usuários": "Usuários",
+            "⚙️ Configurações": "Configurações",
             "🛠️ Ferramentas Administrativas": "Ferramentas Administrativas",
         }
         expected = {
-            "ADMIN": ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados", "💰 Revisão de Preços", "🏛 Regras Fiscais", "🧾 Log", "👤 Usuários", "🛠️ Ferramentas Administrativas"],
+            "ADMIN": ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados", "💰 Revisão de Preços", "🏛 Regras Fiscais", "🧾 Log", "👤 Usuários", "⚙️ Configurações", "🛠️ Ferramentas Administrativas"],
             "VENDEDORA": ["📄 Análise de Pedidos KSB", "📦 Itens Cadastrados"],
             "PROCESSISTA": ["📦 Itens Cadastrados"],
             "OUTRO": ["📄 Análise de Pedidos KSB"],
@@ -167,6 +184,25 @@ class AppDesignTests(unittest.TestCase):
                 at.run()
                 self.assertEqual(at.session_state["pagina_atual"], menus[-1])
         self.assertEqual(self.writes.call_count, 0)
+
+    def test_admin_can_edit_and_save_system_settings(self):
+        at = self.app()
+        at.sidebar.button(key="nav_⚙️ Configurações").click().run()
+
+        inputs = {widget.label: widget for widget in at.number_input}
+        self.assertEqual(inputs["Validade da revisão de preço (dias)"].value, 90)
+        self.assertEqual(inputs["Tolerância de diferença de preço (R$)"].value, 0.01)
+        self.assertEqual(inputs["Tolerância de diferença fiscal (R$)"].value, 1.0)
+
+        inputs["Validade da revisão de preço (dias)"].set_value(120)
+        inputs["Tolerância de diferença de preço (R$)"].set_value(0.5)
+        inputs["Tolerância de diferença fiscal (R$)"].set_value(2.0)
+        next(button for button in at.button if button.label == "💾 Salvar configurações").click().run()
+
+        self.assertEqual(
+            self.saved_settings,
+            [(SystemSettings(120, 0.5, 2.0), "Usuário de teste")],
+        )
 
     def test_native_tables_do_not_create_a_second_scroll_container(self):
         at = self.app()

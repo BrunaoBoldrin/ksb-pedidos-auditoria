@@ -14,6 +14,7 @@ from database import (
     atualizar_material,
     atualizar_regra_fiscal,
     buscar_material,
+    buscar_configuracoes_sistema,
     buscar_usuario_login,
     conectar,
     excluir_material,
@@ -25,13 +26,16 @@ from database import (
     listar_logs_auditorias,
     listar_logs_revisoes_preco,
     listar_materiais_completo,
+    listar_metadados_configuracoes,
     listar_regras_fiscais,
     listar_usuarios,
     pedido_ja_aprovado,
     registrar_auditoria_pedido,
+    salvar_configuracoes_sistema,
 )
 from order_workflow import approved_orders_in_batch, process_uploaded_orders, upload_fingerprints
 from parser import calcular_divisor_base, extract_order_number, processar_pdf
+from system_settings import SystemSettings
 from ui_components import (
     apply_design,
     cabecalho_item_html,
@@ -50,6 +54,7 @@ from ui_rules import (
     build_outdated_prices_table,
     filter_audit_log,
     filter_price_log,
+    format_timestamp_sao_paulo,
     menu_options_for_profile,
 )
 
@@ -546,7 +551,9 @@ def exibir_resultados_processamento(resultados):
     st.success("Processamento concluído com sucesso!")
 
 
-def executar_processamento(uploaded_files, pedidos_reavaliados, confirmacoes, usuario):
+def executar_processamento(
+    uploaded_files, pedidos_reavaliados, confirmacoes, usuario, configuracoes
+):
     st.session_state.resultados_processados = None
     st.session_state.assinatura_resultados = None
     progresso = st.progress(0)
@@ -556,7 +563,7 @@ def executar_processamento(uploaded_files, pedidos_reavaliados, confirmacoes, us
             usuario,
             pedidos_reavaliados,
             confirmacoes,
-            processar_pdf,
+            lambda caminho: processar_pdf(caminho, settings=configuracoes),
             registrar_auditoria_pedido,
         )
     progresso.progress(100)
@@ -604,6 +611,7 @@ if st.session_state.usuario_logado is None:
 
 perfil = st.session_state.perfil_usuario
 usuario_revisao_atual = st.session_state.nome_usuario or st.session_state.usuario_logado
+configuracoes_sistema = buscar_configuracoes_sistema()
 opcoes_menu = menu_options_for_profile(perfil)
 
 if st.session_state.get("pagina_atual") not in opcoes_menu:
@@ -694,6 +702,7 @@ if menu == "📄 Análise de Pedidos KSB":
                         pedidos_pendentes,
                         (confirmou_auditoria, confirmou_implantacao),
                         usuario_revisao_atual,
+                        configuracoes_sistema,
                     )
                     st.session_state.pedidos_reavaliacao_pendentes = []
                     st.session_state.arquivos_reavaliacao_pendentes = []
@@ -718,6 +727,7 @@ if menu == "📄 Análise de Pedidos KSB":
                         [],
                         (False, False),
                         usuario_revisao_atual,
+                        configuracoes_sistema,
                     )
             except Exception as erro:
                 st.error("Não foi possível processar os pedidos.")
@@ -919,12 +929,16 @@ elif menu == "💰 Revisão de Preços":
     df_precos_desatualizados = build_outdated_prices_table(
         listar_materiais_completo(),
         date.today(),
+        review_days=configuracoes_sistema.price_review_days,
     )
     st.markdown(metric_html("Produtos com preço desatualizado", len(df_precos_desatualizados), "Preços cadastrados com revisão pendente", True), unsafe_allow_html=True)
     if df_precos_desatualizados.empty:
         st.success("Todos os produtos com preço cadastrado estão dentro do prazo de revisão.")
     else:
-        st.caption("A lista considera preços sem data válida ou cuja última revisão ocorreu há mais de três meses.")
+        st.caption(
+            "A lista considera preços sem data válida ou cuja última revisão ocorreu "
+            f"há mais de {configuracoes_sistema.price_review_days} dias."
+        )
         st.dataframe(format_currency_columns(df_precos_desatualizados), use_container_width=True, hide_index=True)
         botao_download_excel(
             df_precos_desatualizados,
@@ -1268,6 +1282,68 @@ elif menu == "👤 Usuários":
             if st.button("✅ Confirmar Exclusão"): excluir_usuario(int(u["ID"])); st.session_state.modo_usuario = None; st.session_state.usuario_em_edicao = None; st.rerun()
         with c2:
             if st.button("❌ Cancelar Exclusão"): st.session_state.modo_usuario = None; st.session_state.usuario_em_edicao = None; st.rerun()
+
+elif menu == "⚙️ Configurações":
+    page_header(
+        "Configurações",
+        "Ajuste os critérios gerais usados pelo diagnóstico. Acesso exclusivo do Administrador.",
+    )
+    if perfil != "ADMIN":
+        st.error("Acesso negado.")
+        st.stop()
+
+    metadados_configuracoes = listar_metadados_configuracoes()
+    if st.session_state.pop("configuracoes_salvas", False):
+        st.success("Configurações salvas. Os novos critérios já serão usados nas próximas análises.")
+
+    def legenda_configuracao(chave):
+        metadado = metadados_configuracoes.get(chave, {})
+        usuario = metadado.get("usuario") or "SISTEMA"
+        data_hora = format_timestamp_sao_paulo(metadado.get("data_hora"))
+        return f"Última alteração: {usuario} em {data_hora} (horário de São Paulo)."
+
+    with st.form("form_configuracoes_sistema"):
+        prazo_revisao = st.number_input(
+            "Validade da revisão de preço (dias)",
+            min_value=1,
+            max_value=3650,
+            value=configuracoes_sistema.price_review_days,
+            step=1,
+            help="Após este prazo, o diagnóstico exigirá uma nova revisão do preço.",
+        )
+        st.caption(legenda_configuracao("price_review_days"))
+
+        tolerancia_preco = st.number_input(
+            "Tolerância de diferença de preço (R$)",
+            min_value=0.0,
+            max_value=1_000_000.0,
+            value=configuracoes_sistema.price_difference_tolerance,
+            step=0.01,
+            format="%.2f",
+            help="Diferenças iguais ou inferiores a este valor são aceitas na análise comercial.",
+        )
+        st.caption(legenda_configuracao("price_difference_tolerance"))
+
+        tolerancia_fiscal = st.number_input(
+            "Tolerância de diferença fiscal (R$)",
+            min_value=0.0,
+            max_value=1_000_000.0,
+            value=configuracoes_sistema.fiscal_difference_tolerance,
+            step=0.01,
+            format="%.2f",
+            help="Diferenças iguais ou inferiores a este valor são aceitas na análise fiscal.",
+        )
+        st.caption(legenda_configuracao("fiscal_difference_tolerance"))
+
+        if st.form_submit_button("💾 Salvar configurações", type="primary"):
+            novas_configuracoes = SystemSettings(
+                price_review_days=int(prazo_revisao),
+                price_difference_tolerance=float(tolerancia_preco),
+                fiscal_difference_tolerance=float(tolerancia_fiscal),
+            )
+            salvar_configuracoes_sistema(novas_configuracoes, usuario_revisao_atual)
+            st.session_state.configuracoes_salvas = True
+            st.rerun()
 
 elif menu == "🛠️ Ferramentas Administrativas":
     page_header("Ferramentas Administrativas", "Manutenção do sistema. Acesso exclusivo do Administrador.")
