@@ -747,7 +747,7 @@ elif menu == "📦 Itens Cadastrados":
         listar_materiais_completo(),
         columns=["Código Material", "Descrição", "Material", "Norma", "NCM", "Unidade", "Código Interno Jundiaí", "Código Interno Várzea", "Preço Unitário Líquido", "Última Revisão", "Usuário Última Revisão"],
     )
-    df_materiais = df_materiais_completo.copy()
+    df_materiais = df_materiais_completo
 
     filtro_material = st.text_input("Pesquisar material", placeholder="Código, descrição ou código interno...")
     if filtro_material and not df_materiais.empty:
@@ -771,6 +771,8 @@ elif menu == "📦 Itens Cadastrados":
         tabela_materiais = st.data_editor(tabela_materiais_exibicao, use_container_width=True, hide_index=True)
         indices_selecionados = tabela_materiais.index[tabela_materiais["Selecionar"] == True]
         materiais_selecionados = df_materiais.loc[indices_selecionados]
+
+    if not df_materiais_completo.empty:
         botao_download_excel(
             df_materiais_completo,
             "📥 Baixar banco completo de itens em Excel",
