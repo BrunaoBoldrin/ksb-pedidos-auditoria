@@ -281,6 +281,7 @@ class AppDesignTests(unittest.TestCase):
             at.sidebar.button(key="nav_📦 Itens Cadastrados").click().run()
 
             self.assertEqual(len(at.exception), 0)
+            self.assertEqual(len(at.dataframe[0].value), 300)
             exported_items = next(
                 call.args[0]
                 for call in exporter.call_args_list
