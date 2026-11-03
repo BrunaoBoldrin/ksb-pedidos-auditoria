@@ -552,11 +552,28 @@ def exibir_resultados_processamento(resultados):
 
 
 def executar_processamento(
-    uploaded_files, pedidos_reavaliados, confirmacoes, usuario, configuracoes
+    uploaded_files,
+    pedidos_reavaliados,
+    confirmacoes,
+    usuario,
+    configuracoes,
+    progresso=None,
+    etapas_anteriores=0,
+    total_etapas=None,
 ):
     st.session_state.resultados_processados = None
     st.session_state.assinatura_resultados = None
-    progresso = st.progress(0)
+    total_pdfs = len(uploaded_files)
+    total_etapas = total_etapas or total_pdfs
+    progresso = progresso or st.progress(0, text=f"Processando 0 de {total_pdfs} PDFs...")
+
+    def atualizar_progresso(concluidos, total, nome_arquivo):
+        percentual = int(((etapas_anteriores + concluidos) / total_etapas) * 100)
+        progresso.progress(
+            percentual,
+            text=f"Processando PDF {concluidos} de {total}: {nome_arquivo}",
+        )
+
     with st.spinner("Processando PDFs..."):
         resultados = process_uploaded_orders(
             uploaded_files,
@@ -565,8 +582,8 @@ def executar_processamento(
             confirmacoes,
             lambda caminho: processar_pdf(caminho, settings=configuracoes),
             registrar_auditoria_pedido,
+            progress_callback=atualizar_progresso,
         )
-    progresso.progress(100)
     st.session_state.resultados_processados = resultados
     st.session_state.assinatura_resultados = upload_fingerprints(uploaded_files)
 
@@ -712,12 +729,25 @@ if menu == "📄 Análise de Pedidos KSB":
         elif st.button("Processar pedidos", type="primary"):
             try:
                 salvar_uploads(uploaded_files)
+                total_pdfs = len(uploaded_files)
+                total_etapas = total_pdfs * 2
+                progresso = st.progress(0, text=f"Verificando 0 de {total_pdfs} PDFs...")
+
+                def atualizar_verificacao(concluidos, total, nome_arquivo):
+                    percentual = int((concluidos / total_etapas) * 100)
+                    progresso.progress(
+                        percentual,
+                        text=f"Verificando PDF {concluidos} de {total}: {nome_arquivo}",
+                    )
+
                 pedidos_aprovados = approved_orders_in_batch(
                     uploaded_files,
                     extract_order_number,
                     pedido_ja_aprovado,
+                    progress_callback=atualizar_verificacao,
                 )
                 if pedidos_aprovados:
+                    progresso.progress(100, text="Verificação concluída. Confirmação necessária.")
                     st.session_state.pedidos_reavaliacao_pendentes = pedidos_aprovados
                     st.session_state.arquivos_reavaliacao_pendentes = assinaturas_arquivos
                     st.rerun()
@@ -728,6 +758,9 @@ if menu == "📄 Análise de Pedidos KSB":
                         (False, False),
                         usuario_revisao_atual,
                         configuracoes_sistema,
+                        progresso=progresso,
+                        etapas_anteriores=total_pdfs,
+                        total_etapas=total_etapas,
                     )
             except Exception as erro:
                 st.error("Não foi possível processar os pedidos.")
