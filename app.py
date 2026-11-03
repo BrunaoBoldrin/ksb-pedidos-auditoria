@@ -567,11 +567,18 @@ def executar_processamento(
     total_etapas = total_etapas or total_pdfs
     progresso = progresso or st.progress(0, text=f"Processando 0 de {total_pdfs} PDFs...")
 
+    def iniciar_processamento(indice, total, nome_arquivo):
+        percentual = int(((etapas_anteriores + indice - 1) / total_etapas) * 100)
+        progresso.progress(
+            percentual,
+            text=f"Processando PDF {indice} de {total}: {nome_arquivo}",
+        )
+
     def atualizar_progresso(concluidos, total, nome_arquivo):
         percentual = int(((etapas_anteriores + concluidos) / total_etapas) * 100)
         progresso.progress(
             percentual,
-            text=f"Processando PDF {concluidos} de {total}: {nome_arquivo}",
+            text=f"PDF processado {concluidos} de {total}: {nome_arquivo}",
         )
 
     with st.spinner("Processando PDFs..."):
@@ -583,6 +590,7 @@ def executar_processamento(
             lambda caminho: processar_pdf(caminho, settings=configuracoes),
             registrar_auditoria_pedido,
             progress_callback=atualizar_progresso,
+            started_callback=iniciar_processamento,
         )
     st.session_state.resultados_processados = resultados
     st.session_state.assinatura_resultados = upload_fingerprints(uploaded_files)
@@ -733,11 +741,18 @@ if menu == "📄 Análise de Pedidos KSB":
                 total_etapas = total_pdfs * 2
                 progresso = st.progress(0, text=f"Verificando 0 de {total_pdfs} PDFs...")
 
+                def iniciar_verificacao(indice, total, nome_arquivo):
+                    percentual = int(((indice - 1) / total_etapas) * 100)
+                    progresso.progress(
+                        percentual,
+                        text=f"Verificando PDF {indice} de {total}: {nome_arquivo}",
+                    )
+
                 def atualizar_verificacao(concluidos, total, nome_arquivo):
                     percentual = int((concluidos / total_etapas) * 100)
                     progresso.progress(
                         percentual,
-                        text=f"Verificando PDF {concluidos} de {total}: {nome_arquivo}",
+                        text=f"PDF verificado {concluidos} de {total}: {nome_arquivo}",
                     )
 
                 pedidos_aprovados = approved_orders_in_batch(
@@ -745,6 +760,7 @@ if menu == "📄 Análise de Pedidos KSB":
                     extract_order_number,
                     pedido_ja_aprovado,
                     progress_callback=atualizar_verificacao,
+                    started_callback=iniciar_verificacao,
                 )
                 if pedidos_aprovados:
                     progresso.progress(100, text="Verificação concluída. Confirmação necessária.")
