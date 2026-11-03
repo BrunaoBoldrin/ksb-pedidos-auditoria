@@ -603,8 +603,15 @@ def processar_pdf(PDF_PATH, price_reference_date=None, settings=None):
                 "Item": item,
                 "Código Material": codigo_material,
                 "Descrição": descricao,
+                "Código Interno Jundiaí": str(
+                    material_cadastrado.get("codigo_interno_jundiai") or ""
+                ) if material_cadastrado else "",
+                "Código Interno Várzea": str(
+                    material_cadastrado.get("codigo_interno_varzea") or ""
+                ) if material_cadastrado else "",
                 "Quantidade": quantidade_float,
                 "Unidade": unidade_item,
+                "Data Entrega": data_entrega,
                 "Status": status_final,
                 "NCM Pedido KSB": ncm,
                 "Descrição NCM Pedido": descricao_ncm_pedido if ncm_divergente else "",
