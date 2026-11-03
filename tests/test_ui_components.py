@@ -1,4 +1,5 @@
 import unittest
+from datetime import date
 from html.parser import HTMLParser
 from io import BytesIO
 
@@ -132,6 +133,73 @@ class PresentationTests(unittest.TestCase):
 
         self.assertEqual(price_cell.value, 1234.5)
         self.assertEqual(price_cell.number_format, '[$R$-pt-BR] #,##0.00')
+
+    def test_codigo_gloria_usa_a_unidade_do_pedido(self):
+        linha = {
+            "Unidade Pedido": "KSB Jundiaí - SP",
+            "Código Interno Jundiaí": "GL-JDI-10",
+            "Código Interno Várzea": "GL-VAR-10",
+        }
+        self.assertEqual(ui_components.selecionar_codigo_gloria(linha), "GL-JDI-10")
+
+        linha["Unidade Pedido"] = "Várzea Paulista"
+        self.assertEqual(ui_components.selecionar_codigo_gloria(linha), "GL-VAR-10")
+
+        linha["Unidade Pedido"] = "Varzea"
+        linha["Código Interno Várzea"] = ""
+        self.assertEqual(ui_components.selecionar_codigo_gloria(linha), "Não cadastrado")
+
+        linha["Unidade Pedido"] = "Unidade desconhecida"
+        self.assertEqual(ui_components.selecionar_codigo_gloria(linha), "Unidade não identificada")
+
+    def test_preco_unitario_final_divide_total_pela_quantidade_com_seguranca(self):
+        self.assertEqual(
+            ui_components.calcular_preco_unitario_final({"Valor Pedido": 240, "Quantidade": 2}),
+            120.0,
+        )
+        self.assertIsNone(
+            ui_components.calcular_preco_unitario_final({"Valor Pedido": 240, "Quantidade": 0})
+        )
+        self.assertIsNone(
+            ui_components.calcular_preco_unitario_final({"Valor Pedido": "inválido", "Quantidade": 2})
+        )
+
+    def test_prazo_de_entrega_distingue_futuro_hoje_vencido_e_invalido(self):
+        referencia = date(2026, 11, 3)
+        self.assertEqual(
+            ui_components.formatar_prazo_entrega("18.11.2026", referencia),
+            "15 dias restantes",
+        )
+        self.assertEqual(
+            ui_components.formatar_prazo_entrega("03.11.2026", referencia),
+            "Entrega hoje",
+        )
+        self.assertEqual(
+            ui_components.formatar_prazo_entrega("31.10.2026", referencia),
+            "Atrasado há 3 dias",
+        )
+        self.assertEqual(
+            ui_components.formatar_prazo_entrega("data inválida", referencia),
+            "Não disponível",
+        )
+
+    def test_pedidos_sao_ordenados_pelo_status_completo_e_itens_pelo_numero(self):
+        lote = pd.DataFrame([
+            {"Pedido": "4502", "Item": "00020", "Status": "OK", "Status Comercial": "PENDENTE"},
+            {"Pedido": "4502", "Item": "00010", "Status": "OK", "Status Comercial": "OK"},
+            {"Pedido": "4501", "Item": "00100", "Status": "OK", "Status Comercial": "OK"},
+        ])
+        visiveis = lote.iloc[[1, 2]].copy()
+
+        grupos = ui_components.agrupar_pedidos(lote, visiveis)
+
+        self.assertEqual([(pedido, status) for pedido, status, _ in grupos], [
+            ("4501", "OK"),
+            ("4502", "PENDENTE"),
+        ])
+        self.assertEqual(grupos[0][2]["Item"].tolist(), ["00100"])
+        self.assertEqual(grupos[1][2]["Item"].tolist(), ["00010"])
+        self.assertEqual(ui_components.agrupar_pedidos(lote, lote.iloc[0:0]), [])
 
 
 if __name__ == "__main__":
