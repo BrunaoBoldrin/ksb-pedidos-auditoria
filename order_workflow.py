@@ -17,11 +17,17 @@ def upload_fingerprints(files):
 
 
 def approved_orders_in_batch(
-    files, extract_order_number_func, is_approved_func, progress_callback=None
+    files,
+    extract_order_number_func,
+    is_approved_func,
+    progress_callback=None,
+    started_callback=None,
 ):
     approved = []
     total = len(files)
     for index, uploaded_file in enumerate(files, start=1):
+        if started_callback:
+            started_callback(index, total, uploaded_file.name)
         order_number = extract_order_number_func(uploaded_file.name)
         if order_number and is_approved_func(order_number) and order_number not in approved:
             approved.append(order_number)
@@ -38,6 +44,7 @@ def process_uploaded_orders(
     process_pdf_func,
     register_audit_func,
     progress_callback=None,
+    started_callback=None,
 ):
     reaudit_order_numbers = {str(number) for number in (reaudit_order_numbers or [])}
     confirmed_audit, confirmed_implementation = confirmations
@@ -47,6 +54,8 @@ def process_uploaded_orders(
     results = []
     total = len(files)
     for index, uploaded_file in enumerate(files, start=1):
+        if started_callback:
+            started_callback(index, total, uploaded_file.name)
         extracted_data, analysis = process_pdf_func(uploaded_file.name)
         if analysis.empty:
             raise ValueError(f"Nenhum item foi identificado no arquivo {uploaded_file.name}.")
