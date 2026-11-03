@@ -6,9 +6,10 @@ import tempfile
 import unittest
 from contextlib import ExitStack, chdir
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
+import streamlit
 from streamlit.testing.v1 import AppTest
 
 import database
@@ -125,6 +126,68 @@ class AppDesignTests(unittest.TestCase):
             self.assertEqual(len(at.exception), 0)
             self.assertEqual(self.writes.call_count, 1)
             self.assertEqual(len(at.get("download_button")), 4)
+
+    def test_eight_pdf_batch_updates_progress_during_verification_and_processing(self):
+        at = self.app()
+        uploads = [
+            (f"pedido-{index}.pdf", f"fixture-{index}".encode(), "application/pdf")
+            for index in range(1, 9)
+        ]
+        at.file_uploader[0].set_value(uploads).run()
+        rows = pd.DataFrame([
+            {
+                "Pedido": "4501",
+                "Item": "00010",
+                "Código Material": "02154693",
+                "Descrição": "Item de teste",
+                "Status": "OK",
+                "Status Comercial": "OK",
+                "Preço Cadastrado": 100,
+            }
+        ])
+        progress_bar = Mock()
+        visible_during_verification = []
+        visible_during_processing = []
+
+        def extract_order_number(file_name):
+            current_call = progress_bar.progress.call_args
+            visible_during_verification.append(
+                current_call.kwargs["text"] if current_call else None
+            )
+            return "4501"
+
+        def process_pdf(file_name, **_kwargs):
+            current_call = progress_bar.progress.call_args
+            visible_during_processing.append(
+                current_call.kwargs["text"] if current_call else None
+            )
+            return rows.copy(), rows.copy()
+
+        self.writes.side_effect = None
+
+        with tempfile.TemporaryDirectory() as directory, chdir(directory), patch.object(
+            parser, "extract_order_number", side_effect=extract_order_number
+        ), patch.object(database, "pedido_ja_aprovado", return_value=False), patch.object(
+            parser, "processar_pdf", side_effect=process_pdf
+        ), patch.object(streamlit, "progress", return_value=progress_bar):
+            next(button for button in at.button if button.label == "Processar pedidos").click().run()
+
+        self.assertEqual(len(at.exception), 0)
+        self.assertEqual(
+            [call.args[0] for call in progress_bar.progress.call_args_list],
+            [
+                0, 6, 6, 12, 12, 18, 18, 25, 25, 31, 31, 37, 37, 43, 43, 50,
+                50, 56, 56, 62, 62, 68, 68, 75, 75, 81, 81, 87, 87, 93, 93, 100,
+            ],
+        )
+        self.assertEqual(
+            visible_during_verification,
+            [f"Verificando PDF {index} de 8: pedido-{index}.pdf" for index in range(1, 9)],
+        )
+        self.assertEqual(
+            visible_during_processing,
+            [f"Processando PDF {index} de 8: pedido-{index}.pdf" for index in range(1, 9)],
+        )
 
     def test_login_and_registration_forms_render_with_native_controls(self):
         at = AppTest.from_file(str(APP), default_timeout=15).run()
