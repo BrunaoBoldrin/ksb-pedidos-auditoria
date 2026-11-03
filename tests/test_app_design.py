@@ -6,9 +6,10 @@ import tempfile
 import unittest
 from contextlib import ExitStack, chdir
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
+import streamlit
 from streamlit.testing.v1 import AppTest
 
 import database
@@ -125,6 +126,48 @@ class AppDesignTests(unittest.TestCase):
             self.assertEqual(len(at.exception), 0)
             self.assertEqual(self.writes.call_count, 1)
             self.assertEqual(len(at.get("download_button")), 4)
+
+    def test_eight_pdf_batch_updates_progress_during_verification_and_processing(self):
+        at = self.app()
+        uploads = [
+            (f"pedido-{index}.pdf", f"fixture-{index}".encode(), "application/pdf")
+            for index in range(1, 9)
+        ]
+        at.file_uploader[0].set_value(uploads).run()
+        rows = pd.DataFrame([
+            {
+                "Pedido": "4501",
+                "Item": "00010",
+                "Código Material": "02154693",
+                "Descrição": "Item de teste",
+                "Status": "OK",
+                "Status Comercial": "OK",
+                "Preço Cadastrado": 100,
+            }
+        ])
+        progress_bar = Mock()
+        self.writes.side_effect = None
+
+        with tempfile.TemporaryDirectory() as directory, chdir(directory), patch.object(
+            parser, "extract_order_number", return_value="4501"
+        ), patch.object(database, "pedido_ja_aprovado", return_value=False), patch.object(
+            parser, "processar_pdf", return_value=(rows.copy(), rows.copy())
+        ), patch.object(streamlit, "progress", return_value=progress_bar):
+            next(button for button in at.button if button.label == "Processar pedidos").click().run()
+
+        self.assertEqual(len(at.exception), 0)
+        self.assertEqual(
+            [call.args[0] for call in progress_bar.progress.call_args_list],
+            [6, 12, 18, 25, 31, 37, 43, 50, 56, 62, 68, 75, 81, 87, 93, 100],
+        )
+        self.assertEqual(
+            progress_bar.progress.call_args_list[0].kwargs["text"],
+            "Verificando PDF 1 de 8: pedido-1.pdf",
+        )
+        self.assertEqual(
+            progress_bar.progress.call_args_list[8].kwargs["text"],
+            "Processando PDF 1 de 8: pedido-1.pdf",
+        )
 
     def test_login_and_registration_forms_render_with_native_controls(self):
         at = AppTest.from_file(str(APP), default_timeout=15).run()
