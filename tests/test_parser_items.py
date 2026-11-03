@@ -110,6 +110,46 @@ Data 30.06.2026
 
         self.assertEqual(dados["Item"].tolist(), ["00010", "00020", "00030"])
 
+    def test_analise_inclui_codigos_internos_e_data_de_entrega(self):
+        texto = """
+Pedido 4508000000
+Data 30.06.2026
+Endereço de entrega: KSB Brasil Ltda. Jundiaí - SP
+""" + bloco_item("00010", "WGS-5520", "ITEM OPERACIONAL", "406,69")
+        material = {
+            "codigo_material": "WGS-5520",
+            "descricao": "ITEM OPERACIONAL",
+            "material": "LATÃO",
+            "norma": "BRN 66/C08 01",
+            "ncm": "7419.80.90",
+            "unidade_medida": "PEÇ",
+            "codigo_interno_jundiai": "GL-JDI-5520",
+            "codigo_interno_varzea": "GL-VAR-5520",
+            "preco_unitario_liquido": 406.69,
+            "data_ultima_revisao": "01/11/2026",
+            "usuario_ultima_revisao_preco": "Admin",
+        }
+
+        with patch.object(parser.pdfplumber, "open", return_value=PdfFalso(texto)), patch.object(
+            parser, "buscar_material_por_codigo", return_value=material
+        ):
+            _, analises = parser.processar_pdf("pedido.pdf")
+
+        self.assertEqual(analises.loc[0, "Código Interno Jundiaí"], "GL-JDI-5520")
+        self.assertEqual(analises.loc[0, "Código Interno Várzea"], "GL-VAR-5520")
+        self.assertEqual(analises.loc[0, "Data Entrega"], "25.09.2026")
+
+    def test_analise_de_material_nao_cadastrado_mantem_codigos_internos_vazios(self):
+        texto = "Pedido 4508000000\nData 30.06.2026\n" + bloco_item(
+            "00010", "SEM-CADASTRO", "ITEM SEM CADASTRO", "100,00"
+        )
+
+        with patch.object(parser.pdfplumber, "open", return_value=PdfFalso(texto)):
+            _, analises = parser.processar_pdf("pedido.pdf")
+
+        self.assertEqual(analises.loc[0, "Código Interno Jundiaí"], "")
+        self.assertEqual(analises.loc[0, "Código Interno Várzea"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,8 @@ All values embedded in HTML are escaped, including diagnostic text from PDFs.
 from html import escape
 from io import BytesIO
 from pathlib import Path
+from datetime import date, datetime
+import unicodedata
 
 import pandas as pd
 
@@ -115,6 +117,87 @@ def filtrar_itens(df, filtro, pedido="Todos"):
     return df.loc[mask].copy()
 
 
+def _normalizar_busca(valor):
+    normalizado = unicodedata.normalize("NFKD", texto(valor, ""))
+    return "".join(caractere for caractere in normalizado if not unicodedata.combining(caractere)).lower()
+
+
+def selecionar_codigo_gloria(linha):
+    unidade = _normalizar_busca(linha.get("Unidade Pedido"))
+    if "jundiai" in unidade:
+        return texto(linha.get("Código Interno Jundiaí"), "Não cadastrado")
+    if "varzea" in unidade:
+        return texto(linha.get("Código Interno Várzea"), "Não cadastrado")
+    return "Unidade não identificada"
+
+
+def _numero_seguro(valor):
+    if valor is None or pd.isna(valor):
+        return None
+    if isinstance(valor, str):
+        valor = valor.strip().replace("R$", "").strip()
+        if not valor:
+            return None
+        if "," in valor:
+            valor = valor.replace(".", "").replace(",", ".")
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def calcular_preco_unitario_final(linha):
+    valor_total = _numero_seguro(linha.get("Valor Pedido"))
+    quantidade = _numero_seguro(linha.get("Quantidade"))
+    if valor_total is None or quantidade is None or quantidade <= 0:
+        return None
+    return round(valor_total / quantidade, 2)
+
+
+def formatar_prazo_entrega(data_entrega, data_referencia=None):
+    data_referencia = data_referencia or date.today()
+    try:
+        entrega = datetime.strptime(texto(data_entrega, ""), "%d.%m.%Y").date()
+    except (TypeError, ValueError):
+        return "Não disponível"
+
+    dias = (entrega - data_referencia).days
+    if dias > 0:
+        return f"{dias} dia restante" if dias == 1 else f"{dias} dias restantes"
+    if dias == 0:
+        return "Entrega hoje"
+    atraso = abs(dias)
+    return f"Atrasado há {atraso} dia" if atraso == 1 else f"Atrasado há {atraso} dias"
+
+
+def agrupar_pedidos(df_lote, df_visivel):
+    if df_visivel.empty or "Pedido" not in df_visivel.columns:
+        return []
+
+    ordem_visivel = list(dict.fromkeys(_status(df_visivel, "Pedido").tolist()))
+    status_pedidos = {}
+    for pedido in ordem_visivel:
+        linhas_pedido = df_lote.loc[_status(df_lote, "Pedido") == pedido]
+        aprovado = (
+            not linhas_pedido.empty
+            and (_status(linhas_pedido, "Status") == "OK").all()
+            and (_status(linhas_pedido, "Status Comercial") == "OK").all()
+        )
+        status_pedidos[pedido] = "OK" if aprovado else "PENDENTE"
+
+    pedidos_ordenados = sorted(
+        ordem_visivel,
+        key=lambda pedido: (status_pedidos[pedido] != "OK", ordem_visivel.index(pedido)),
+    )
+    grupos = []
+    for pedido in pedidos_ordenados:
+        itens = df_visivel.loc[_status(df_visivel, "Pedido") == pedido].copy()
+        itens["_ordem_item"] = pd.to_numeric(_status(itens, "Item"), errors="coerce")
+        itens = itens.sort_values("_ordem_item", kind="stable", na_position="last").drop(columns="_ordem_item")
+        grupos.append((pedido, status_pedidos[pedido], itens))
+    return grupos
+
+
 def _tom(status):
     status = texto(status, "Não avaliado")
     if status == "OK":
@@ -135,14 +218,13 @@ def badge_html(status):
 
 
 def cabecalho_item_html(linha):
-    pedido = escape(texto(linha.get("Pedido")))
     item = escape(texto(linha.get("Item")))
     codigo = escape(texto(linha.get("Código Material")))
     descricao = escape(texto(linha.get("Descrição")))
     return (
         '<article class="ds-result-row">'
         '<div class="ds-result-identity">'
-        f'<span class="ds-eyebrow">Pedido {pedido}</span>'
+        '<span class="ds-eyebrow">Item do pedido</span>'
         f'<strong>Item {item}</strong><span class="ds-code">{codigo}</span></div>'
         f'<div class="ds-result-description">{descricao}</div>'
         '<div class="ds-result-status"><span class="ds-label">Fiscal</span>'

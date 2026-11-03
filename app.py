@@ -37,17 +37,21 @@ from order_workflow import approved_orders_in_batch, process_uploaded_orders, up
 from parser import calcular_divisor_base, extract_order_number, processar_pdf
 from system_settings import SystemSettings
 from ui_components import (
+    agrupar_pedidos,
     apply_design,
     cabecalho_item_html,
+    calcular_preco_unitario_final,
     dataframe_to_excel_bytes,
     format_currency_columns,
     formatar_moeda_brl,
     filtrar_itens,
+    formatar_prazo_entrega,
     metric_html,
     page_header,
     painel_diagnostico_html,
     profile_html,
     render_summary,
+    selecionar_codigo_gloria,
     write_dataframe_to_excel,
 )
 from ui_rules import (
@@ -283,7 +287,7 @@ def status_geral_item(linha):
 def exibir_cards_auditoria(df_analise_final):
     df_analise_final = garantir_preco_cadastrado_com_imposto(df_analise_final)
     render_summary(df_analise_final)
-    st.subheader("Resultado por item")
+    st.subheader("Resultado por pedido")
     filtro_col, pedido_col = st.columns([2, 1])
     with filtro_col:
         filtro = st.radio("Exibir itens", ["Todos", "Com pendência", "Aprovados"], horizontal=True, key="filtro_resultados")
@@ -294,56 +298,83 @@ def exibir_cards_auditoria(df_analise_final):
         st.info("Nenhum item corresponde aos filtros selecionados.")
     st.caption(f"{len(visiveis)} de {len(df_analise_final)} itens no lote. As exportações incluem o lote completo.")
 
-    for _, linha in visiveis.iterrows():
-        status_fiscal = valor_texto(linha, "Status")
-        status_comercial = valor_texto(linha, "Status Comercial")
-        st.markdown(cabecalho_item_html(linha), unsafe_allow_html=True)
-        with st.container(border=True):
-            fiscal_col, comercial_col = st.columns(2)
-            with fiscal_col:
-                exibir_diagnostico_fiscal(linha, status_fiscal)
-            with comercial_col:
-                exibir_diagnostico_comercial(linha, status_comercial)
+    grupo_anterior = None
+    for numero_pedido, status_pedido, itens in agrupar_pedidos(df_analise_final, visiveis):
+        grupo = "Pedidos OK" if status_pedido == "OK" else "Pedidos com pendências"
+        if grupo != grupo_anterior:
+            st.markdown(f'<h3 class="ds-order-group">{grupo}</h3>', unsafe_allow_html=True)
+            grupo_anterior = grupo
+        tom = "success" if status_pedido == "OK" else "warning"
+        st.markdown(
+            '<header class="ds-order-header">'
+            f'<div><span class="ds-eyebrow">{grupo}</span><h2>Pedido {escape(str(numero_pedido))}</h2></div>'
+            f'<span class="ds-badge ds-badge--{tom}">{"✓ APROVADO" if status_pedido == "OK" else "! COM PENDÊNCIAS"}</span>'
+            '</header>',
+            unsafe_allow_html=True,
+        )
 
-            with st.expander("Ver detalhes da auditoria fiscal"):
-                f1, f2, f3 = st.columns(3)
-                f1.write(f"**NCM Pedido KSB:** {valor_texto(linha, 'NCM Pedido KSB')}")
-                f1.write(f"**NCM Cadastro:** {valor_texto(linha, 'NCM Cadastro')}")
-                f2.write(f"**ICMS:** {valor_texto(linha, 'ICMS Regra')}% — {formatar_moeda(linha.get('Valor ICMS'))}")
-                f2.write(f"**Base PIS/COFINS:** {formatar_moeda(linha.get('Base PIS/COFINS'))}")
-                f2.write(f"**PIS:** 1,65% — {formatar_moeda(linha.get('Valor PIS'))}")
-                f2.write(f"**COFINS:** 7,60% — {formatar_moeda(linha.get('Valor COFINS'))}")
-                f2.write(f"**PIS/COFINS Total:** 9,25% — {formatar_moeda(linha.get('Valor PIS/COFINS'))}")
-                f2.write(f"**IPI:** {valor_texto(linha, 'IPI Regra')}% — {formatar_moeda(linha.get('Valor IPI'))}")
-                f3.metric("Líquido Unitário", formatar_moeda(linha.get("Valor Unitário Líquido")))
+        for _, linha in itens.iterrows():
+            status_fiscal = valor_texto(linha, "Status")
+            status_comercial = valor_texto(linha, "Status Comercial")
+            st.markdown(cabecalho_item_html(linha), unsafe_allow_html=True)
+            with st.container(border=True):
+                preco_unitario_final = calcular_preco_unitario_final(linha)
+                destaques = st.columns(3)
+                destaques[0].metric("Código Glória", selecionar_codigo_gloria(linha))
+                destaques[1].metric(
+                    "Preço unitário com impostos",
+                    formatar_moeda(preco_unitario_final) if preco_unitario_final is not None else "Não disponível",
+                )
+                destaques[2].metric(
+                    "Prazo de entrega",
+                    formatar_prazo_entrega(linha.get("Data Entrega")),
+                )
 
-                valores_fiscais = st.columns(3)
-                valores_fiscais[0].metric("Valor Total c/ Imposto s/ IPI", formatar_moeda(linha.get("Valor Base")))
-                valores_fiscais[1].metric("Valor Pedido Total c/ Imposto", formatar_moeda(linha.get("Valor Pedido")))
-                valores_fiscais[2].metric("Valor Calculado Total c/ Imposto e IPI", formatar_moeda(linha.get("Valor Calculado")))
-                if diferenca_monetaria_relevante(linha.get("Diferença")):
-                    st.metric("Diferença Fiscal", formatar_moeda(linha.get("Diferença")))
+                fiscal_col, comercial_col = st.columns(2)
+                with fiscal_col:
+                    exibir_diagnostico_fiscal(linha, status_fiscal)
+                with comercial_col:
+                    exibir_diagnostico_comercial(linha, status_comercial)
 
-            with st.expander("Ver detalhes da análise comercial"):
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Preço Unitário Líquido KSB", formatar_moeda(linha.get("Preço Pedido KSB")))
-                c2.metric("Preço Unitário Líquido Cadastrado", formatar_moeda(linha.get("Preço Cadastrado")))
-                c3.metric("Preço Cadastrado c/ Imposto", formatar_moeda(linha.get("Preço Cadastrado c/ Imposto")))
+                with st.expander("Ver detalhes da auditoria fiscal"):
+                    f1, f2, f3 = st.columns(3)
+                    f1.write(f"**NCM Pedido KSB:** {valor_texto(linha, 'NCM Pedido KSB')}")
+                    f1.write(f"**NCM Cadastro:** {valor_texto(linha, 'NCM Cadastro')}")
+                    f2.write(f"**ICMS:** {valor_texto(linha, 'ICMS Regra')}% — {formatar_moeda(linha.get('Valor ICMS'))}")
+                    f2.write(f"**Base PIS/COFINS:** {formatar_moeda(linha.get('Base PIS/COFINS'))}")
+                    f2.write(f"**PIS:** 1,65% — {formatar_moeda(linha.get('Valor PIS'))}")
+                    f2.write(f"**COFINS:** 7,60% — {formatar_moeda(linha.get('Valor COFINS'))}")
+                    f2.write(f"**PIS/COFINS Total:** 9,25% — {formatar_moeda(linha.get('Valor PIS/COFINS'))}")
+                    f2.write(f"**IPI:** {valor_texto(linha, 'IPI Regra')}% — {formatar_moeda(linha.get('Valor IPI'))}")
+                    f3.metric("Líquido Unitário", formatar_moeda(linha.get("Valor Unitário Líquido")))
 
-                detalhes_preco = []
-                if diferenca_monetaria_relevante(linha.get("Diferença Preço")):
-                    detalhes_preco.append(("Diferença Preço", formatar_moeda(linha.get("Diferença Preço"))))
-                if percentual_relevante(linha.get("Percentual Diferença Preço")):
-                    detalhes_preco.append(("Percentual Diferença Preço", f"{valor_texto(linha, 'Percentual Diferença Preço')}%"))
-                if detalhes_preco:
-                    cols = st.columns(len(detalhes_preco))
-                    for col, (rotulo, valor) in zip(cols, detalhes_preco):
-                        col.metric(rotulo, valor)
+                    valores_fiscais = st.columns(3)
+                    valores_fiscais[0].metric("Valor Total c/ Imposto s/ IPI", formatar_moeda(linha.get("Valor Base")))
+                    valores_fiscais[1].metric("Valor Pedido Total c/ Imposto", formatar_moeda(linha.get("Valor Pedido")))
+                    valores_fiscais[2].metric("Valor Calculado Total c/ Imposto e IPI", formatar_moeda(linha.get("Valor Calculado")))
+                    if diferenca_monetaria_relevante(linha.get("Diferença")):
+                        st.metric("Diferença Fiscal", formatar_moeda(linha.get("Diferença")))
 
-                l1, l2, l3 = st.columns(3)
-                l1.metric("Leadtime Dias", valor_texto(linha, "Leadtime Dias"))
-                l2.write(f"**Data Última Revisão Preço:** {valor_texto(linha, 'Data Última Revisão Preço')}")
-                l3.write(f"**Usuário Última Revisão Preço:** {valor_texto(linha, 'Usuário Última Revisão Preço')}")
+                with st.expander("Ver detalhes da análise comercial"):
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Preço Unitário Líquido KSB", formatar_moeda(linha.get("Preço Pedido KSB")))
+                    c2.metric("Preço Unitário Líquido Cadastrado", formatar_moeda(linha.get("Preço Cadastrado")))
+                    c3.metric("Preço Cadastrado c/ Imposto", formatar_moeda(linha.get("Preço Cadastrado c/ Imposto")))
+
+                    detalhes_preco = []
+                    if diferenca_monetaria_relevante(linha.get("Diferença Preço")):
+                        detalhes_preco.append(("Diferença Preço", formatar_moeda(linha.get("Diferença Preço"))))
+                    if percentual_relevante(linha.get("Percentual Diferença Preço")):
+                        detalhes_preco.append(("Percentual Diferença Preço", f"{valor_texto(linha, 'Percentual Diferença Preço')}%"))
+                    if detalhes_preco:
+                        cols = st.columns(len(detalhes_preco))
+                        for col, (rotulo, valor) in zip(cols, detalhes_preco):
+                            col.metric(rotulo, valor)
+
+                    l1, l2, l3 = st.columns(3)
+                    l1.metric("Leadtime Dias", valor_texto(linha, "Leadtime Dias"))
+                    l2.write(f"**Data Última Revisão Preço:** {valor_texto(linha, 'Data Última Revisão Preço')}")
+                    l3.write(f"**Usuário Última Revisão Preço:** {valor_texto(linha, 'Usuário Última Revisão Preço')}")
 
 
 def exibir_cards_comercial(df_analise_final):
