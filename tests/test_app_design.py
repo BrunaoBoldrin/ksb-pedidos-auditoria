@@ -146,27 +146,47 @@ class AppDesignTests(unittest.TestCase):
             }
         ])
         progress_bar = Mock()
+        visible_during_verification = []
+        visible_during_processing = []
+
+        def extract_order_number(file_name):
+            current_call = progress_bar.progress.call_args
+            visible_during_verification.append(
+                current_call.kwargs["text"] if current_call else None
+            )
+            return "4501"
+
+        def process_pdf(file_name, **_kwargs):
+            current_call = progress_bar.progress.call_args
+            visible_during_processing.append(
+                current_call.kwargs["text"] if current_call else None
+            )
+            return rows.copy(), rows.copy()
+
         self.writes.side_effect = None
 
         with tempfile.TemporaryDirectory() as directory, chdir(directory), patch.object(
-            parser, "extract_order_number", return_value="4501"
+            parser, "extract_order_number", side_effect=extract_order_number
         ), patch.object(database, "pedido_ja_aprovado", return_value=False), patch.object(
-            parser, "processar_pdf", return_value=(rows.copy(), rows.copy())
+            parser, "processar_pdf", side_effect=process_pdf
         ), patch.object(streamlit, "progress", return_value=progress_bar):
             next(button for button in at.button if button.label == "Processar pedidos").click().run()
 
         self.assertEqual(len(at.exception), 0)
         self.assertEqual(
             [call.args[0] for call in progress_bar.progress.call_args_list],
-            [6, 12, 18, 25, 31, 37, 43, 50, 56, 62, 68, 75, 81, 87, 93, 100],
+            [
+                0, 6, 6, 12, 12, 18, 18, 25, 25, 31, 31, 37, 37, 43, 43, 50,
+                50, 56, 56, 62, 62, 68, 68, 75, 75, 81, 81, 87, 87, 93, 93, 100,
+            ],
         )
         self.assertEqual(
-            progress_bar.progress.call_args_list[0].kwargs["text"],
-            "Verificando PDF 1 de 8: pedido-1.pdf",
+            visible_during_verification,
+            [f"Verificando PDF {index} de 8: pedido-{index}.pdf" for index in range(1, 9)],
         )
         self.assertEqual(
-            progress_bar.progress.call_args_list[8].kwargs["text"],
-            "Processando PDF 1 de 8: pedido-1.pdf",
+            visible_during_processing,
+            [f"Processando PDF {index} de 8: pedido-{index}.pdf" for index in range(1, 9)],
         )
 
     def test_login_and_registration_forms_render_with_native_controls(self):
