@@ -16,12 +16,17 @@ def upload_fingerprints(files):
     ]
 
 
-def approved_orders_in_batch(files, extract_order_number_func, is_approved_func):
+def approved_orders_in_batch(
+    files, extract_order_number_func, is_approved_func, progress_callback=None
+):
     approved = []
-    for uploaded_file in files:
+    total = len(files)
+    for index, uploaded_file in enumerate(files, start=1):
         order_number = extract_order_number_func(uploaded_file.name)
         if order_number and is_approved_func(order_number) and order_number not in approved:
             approved.append(order_number)
+        if progress_callback:
+            progress_callback(index, total, uploaded_file.name)
     return approved
 
 
@@ -32,6 +37,7 @@ def process_uploaded_orders(
     confirmations,
     process_pdf_func,
     register_audit_func,
+    progress_callback=None,
 ):
     reaudit_order_numbers = {str(number) for number in (reaudit_order_numbers or [])}
     confirmed_audit, confirmed_implementation = confirmations
@@ -39,7 +45,8 @@ def process_uploaded_orders(
         raise ReauditConfirmationRequired("As duas confirmações são obrigatórias para reavaliar o pedido.")
 
     results = []
-    for uploaded_file in files:
+    total = len(files)
+    for index, uploaded_file in enumerate(files, start=1):
         extracted_data, analysis = process_pdf_func(uploaded_file.name)
         if analysis.empty:
             raise ValueError(f"Nenhum item foi identificado no arquivo {uploaded_file.name}.")
@@ -60,4 +67,6 @@ def process_uploaded_orders(
             arquivo_pdf=uploaded_file.name,
         )
         results.append((extracted_data, analysis))
+        if progress_callback:
+            progress_callback(index, total, uploaded_file.name)
     return results
