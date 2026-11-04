@@ -61,8 +61,22 @@ class AppDesignTests(unittest.TestCase):
         content = b"presentation fixture - no processing"
         at.file_uploader[0].set_value(("pedido.pdf", content, "application/pdf")).run()
         rows = pd.DataFrame([
-            {"Pedido": "4501", "Item": "00010", "Código Material": "02154693", "Descrição": "Aprovado", "Status": "OK", "Status Comercial": "OK", "Preço Cadastrado": 100},
-            {"Pedido": "4501", "Item": "00020", "Código Material": "WGS-5520", "Descrição": "Revisão", "Status": "OK", "Status Comercial": "PENDENTE - REVISÃO DE PREÇO", "Preço Cadastrado": 100, "Diagnóstico Comercial": "PREÇO NECESSITA DE REVISÃO: ATUALIZE O VALOR DO ITEM."},
+            {
+                "Pedido": "4502", "Item": "00020", "Código Material": "WGS-5520",
+                "Descrição": "Revisão", "Status": "OK",
+                "Status Comercial": "PENDENTE - REVISÃO DE PREÇO", "Preço Cadastrado": 100,
+                "Diagnóstico Comercial": "PREÇO NECESSITA DE REVISÃO: ATUALIZE O VALOR DO ITEM.",
+                "Unidade Pedido": "Várzea Paulista", "Código Interno Jundiaí": "GL-JDI-20",
+                "Código Interno Várzea": "GL-VAR-20", "Valor Pedido": 300,
+                "Quantidade": 3, "Data Entrega": "31.12.2099",
+            },
+            {
+                "Pedido": "4501", "Item": "00010", "Código Material": "02154693",
+                "Descrição": "Aprovado", "Status": "OK", "Status Comercial": "OK",
+                "Preço Cadastrado": 100, "Unidade Pedido": "Jundiaí",
+                "Código Interno Jundiaí": "GL-JDI-10", "Código Interno Várzea": "GL-VAR-10",
+                "Valor Pedido": 240, "Quantidade": 2, "Data Entrega": "31.12.2099",
+            },
         ])
         at.session_state["resultados_processados"] = [(rows.copy(), rows.copy())]
         at.session_state["assinatura_resultados"] = [("pedido.pdf", hashlib.sha256(content).hexdigest())]
@@ -80,6 +94,40 @@ class AppDesignTests(unittest.TestCase):
         self.assertIn("PREÇO NECESSITA DE REVISÃO: ATUALIZE O VALOR DO ITEM.", html)
         self.assertEqual(self.writes.call_count, 0)
         self.assertEqual(len(at.get("download_button")), 4)
+
+    def test_resultados_agrupam_pedidos_ok_primeiro_e_destacam_dados_do_item(self):
+        at = self.cached_app()
+        html = "\n".join(m.value for m in at.markdown)
+
+        self.assertIn("Pedidos OK", html)
+        self.assertIn("Pedidos com pendências", html)
+        self.assertLess(html.index("Pedido 4501"), html.index("Pedido 4502"))
+        self.assertEqual(html.count("Pedido 4501"), 1)
+        self.assertEqual(html.count("Pedido 4502"), 1)
+
+        metricas = [(metrica.label, metrica.value) for metrica in at.metric]
+        self.assertIn(("Código Glória", "GL-JDI-10"), metricas)
+        self.assertIn(("Preço unitário com impostos", "R$ 110,19"), metricas)
+        self.assertTrue(any(
+            rotulo == "Prazo de entrega" and str(valor).endswith("dias restantes")
+            for rotulo, valor in metricas
+        ))
+        self.assertIn("PREÇO NECESSITA DE REVISÃO: ATUALIZE O VALOR DO ITEM.", html)
+
+    def test_preco_unitario_com_impostos_usa_cadastro_mesmo_com_quantidade_zero(self):
+        at = self.cached_app()
+        dados, analise = at.session_state["resultados_processados"][0]
+        analise = analise.copy()
+        analise.loc[analise["Pedido"] == "4501", "Quantidade"] = 0
+        at.session_state["resultados_processados"] = [(dados, analise)]
+
+        at.run()
+
+        self.assertEqual(len(at.exception), 0)
+        self.assertIn(
+            ("Preço unitário com impostos", "R$ 110,19"),
+            [(metrica.label, metrica.value) for metrica in at.metric],
+        )
 
     def test_changed_upload_invalidates_old_batch(self):
         at = self.cached_app()
