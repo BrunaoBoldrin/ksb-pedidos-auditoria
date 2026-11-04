@@ -161,6 +161,42 @@ def extract_order_number(pdf_path):
     return match.group(1) if match else ""
 
 
+def identificar_unidade_pedido(texto):
+    inicio = re.search(r"Endereço de entrega\s*:", texto, re.IGNORECASE)
+    if not inicio:
+        return ""
+
+    trecho = texto[inicio.end():inicio.end() + 2000]
+    limites = []
+    for marcador in ("Contato Grupo de Compras", "Condições de pagamento"):
+        posicao = trecho.find(marcador)
+        if posicao >= 0:
+            limites.append(posicao)
+    if limites:
+        trecho = trecho[:min(limites)]
+
+    cidades_com_uf = []
+    for unidade, padrao in (
+        ("Jundiaí", r"\bJundia[ií]\s*[-/,]\s*SP\b"),
+        ("Várzea", r"\bV[aá]rzea(?:\s+Paulista)?\s*[-/,]\s*SP\b"),
+    ):
+        cidade_match = re.search(padrao, trecho, re.IGNORECASE)
+        if cidade_match:
+            cidades_com_uf.append((cidade_match.start(), unidade))
+    if cidades_com_uf:
+        return min(cidades_com_uf)[1]
+
+    cidades_encontradas = {
+        unidade
+        for unidade, padrao in (
+            ("Jundiaí", r"\bJundia[ií]\b"),
+            ("Várzea", r"\bV[aá]rzea(?:\s+Paulista)?\b"),
+        )
+        if re.search(padrao, trecho, re.IGNORECASE)
+    }
+    return next(iter(cidades_encontradas)) if len(cidades_encontradas) == 1 else ""
+
+
 def processar_pdf(PDF_PATH, price_reference_date=None, settings=None):
     settings = normalize_system_settings(settings)
     dados_csv = []
@@ -188,16 +224,7 @@ def processar_pdf(PDF_PATH, price_reference_date=None, settings=None):
     # UNIDADE
     # ====================================
 
-    unidade = ""
-
-    unidade_match = re.search(
-        r"Endereço de entrega:.*?KSB Brasil Ltda\.\s*([A-Za-zÀ-Úà-ú\s]+)-",
-        texto_completo,
-        re.DOTALL,
-    )
-
-    if unidade_match:
-        unidade = unidade_match.group(1).strip()
+    unidade = identificar_unidade_pedido(texto_completo)
 
     # ====================================
     # COMPRADOR
