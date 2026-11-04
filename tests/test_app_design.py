@@ -107,14 +107,14 @@ class AppDesignTests(unittest.TestCase):
 
         metricas = [(metrica.label, metrica.value) for metrica in at.metric]
         self.assertIn(("Código Glória", "GL-JDI-10"), metricas)
-        self.assertIn(("Preço unitário com impostos", "R$ 120,00"), metricas)
+        self.assertIn(("Preço unitário com impostos", "R$ 110,19"), metricas)
         self.assertTrue(any(
             rotulo == "Prazo de entrega" and str(valor).endswith("dias restantes")
             for rotulo, valor in metricas
         ))
         self.assertIn("PREÇO NECESSITA DE REVISÃO: ATUALIZE O VALOR DO ITEM.", html)
 
-    def test_preco_unitario_indisponivel_tem_mensagem_explicita(self):
+    def test_preco_unitario_com_impostos_usa_cadastro_mesmo_com_quantidade_zero(self):
         at = self.cached_app()
         dados, analise = at.session_state["resultados_processados"][0]
         analise = analise.copy()
@@ -125,7 +125,7 @@ class AppDesignTests(unittest.TestCase):
 
         self.assertEqual(len(at.exception), 0)
         self.assertIn(
-            ("Preço unitário com impostos", "Não disponível"),
+            ("Preço unitário com impostos", "R$ 110,19"),
             [(metrica.label, metrica.value) for metrica in at.metric],
         )
 
