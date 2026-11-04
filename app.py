@@ -40,7 +40,6 @@ from ui_components import (
     agrupar_pedidos,
     apply_design,
     cabecalho_item_html,
-    calcular_preco_unitario_final,
     dataframe_to_excel_bytes,
     format_currency_columns,
     formatar_moeda_brl,
@@ -318,12 +317,14 @@ def exibir_cards_auditoria(df_analise_final):
             status_comercial = valor_texto(linha, "Status Comercial")
             st.markdown(cabecalho_item_html(linha), unsafe_allow_html=True)
             with st.container(border=True):
-                preco_unitario_final = calcular_preco_unitario_final(linha)
+                preco_cadastrado_impostos = linha.get("Preço Cadastrado c/ Imposto")
                 destaques = st.columns(3)
                 destaques[0].metric("Código Glória", selecionar_codigo_gloria(linha))
                 destaques[1].metric(
                     "Preço unitário com impostos",
-                    formatar_moeda(preco_unitario_final) if preco_unitario_final is not None else "Não disponível",
+                    formatar_moeda(preco_cadastrado_impostos)
+                    if valor_texto(linha, "Preço Cadastrado c/ Imposto", "")
+                    else "Não disponível",
                 )
                 destaques[2].metric(
                     "Prazo de entrega",
