@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import parser
+import ui_components
 
 
 class PaginaFalsa:
@@ -149,6 +150,75 @@ Endereço de entrega: KSB Brasil Ltda. Jundiaí - SP
 
         self.assertEqual(analises.loc[0, "Código Interno Jundiaí"], "")
         self.assertEqual(analises.loc[0, "Código Interno Várzea"], "")
+
+    def test_endereco_completo_define_unidade_e_codigo_gloria_corretos(self):
+        material = {
+            "codigo_material": "WGS-5520",
+            "descricao": "ITEM OPERACIONAL",
+            "material": "LATÃO",
+            "norma": "BRN 66/C08 01",
+            "ncm": "7419.80.90",
+            "unidade_medida": "PEÇ",
+            "codigo_interno_jundiai": "GL-JDI-5520",
+            "codigo_interno_varzea": "GL-VAR-5520",
+            "preco_unitario_liquido": 406.69,
+            "data_ultima_revisao": "01/11/2026",
+            "usuario_ultima_revisao_preco": "Admin",
+        }
+        casos = [
+            (
+                """Endereço de entrega:
+KSB Brasil Ltda.
+Av. Comendador Antônio Borin, 3500 - Distrito Industrial
+Jundiaí - SP
+""",
+                "Jundiaí",
+                "GL-JDI-5520",
+            ),
+            (
+                """Endereço de entrega:
+KSB Brasil Ltda.
+Rua José Rabelo Portella, 400 - Jardim Maria de Fátima
+Várzea Paulista - SP
+""",
+                "Várzea",
+                "GL-VAR-5520",
+            ),
+            (
+                """Endereço de entrega:
+KSB Brasil Ltda.
+Rua Jundiaí, 100 - Jardim Paulista
+Várzea Paulista - SP
+""",
+                "Várzea",
+                "GL-VAR-5520",
+            ),
+            (
+                """Endereço de entrega:
+KSB Brasil Ltda.
+Rua Exemplo, 100
+13213 180 Jundiaí - SP
+""",
+                "Jundiaí",
+                "GL-JDI-5520",
+            ),
+        ]
+
+        for endereco, unidade_esperada, codigo_esperado in casos:
+            with self.subTest(unidade=unidade_esperada):
+                texto = (
+                    "Pedido 4508000000\nData 30.06.2026\n"
+                    + endereco
+                    + bloco_item("00010", "WGS-5520", "ITEM OPERACIONAL", "406,69")
+                )
+                with patch.object(parser.pdfplumber, "open", return_value=PdfFalso(texto)), patch.object(
+                    parser, "buscar_material_por_codigo", return_value=material
+                ):
+                    _, analises = parser.processar_pdf("pedido.pdf")
+
+                linha = analises.iloc[0]
+                self.assertEqual(linha["Unidade Pedido"], unidade_esperada)
+                self.assertEqual(ui_components.selecionar_codigo_gloria(linha), codigo_esperado)
 
 
 if __name__ == "__main__":
