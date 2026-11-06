@@ -40,7 +40,31 @@ class PricingRepository:
 
     def migrate(self):
         with self.transaction() as c:
-            c.execute((Path(__file__).parent/'migrations/001_dynamic_pricing.sql').read_text())
+            for migration in sorted((Path(__file__).parent/'migrations').glob('[0-9]*.sql')):
+                c.execute(migration.read_text())
+
+    def catalog(self):
+        with self.transaction() as c:
+            c.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
+            c.execute('SELECT version FROM pricing_control WHERE id=1')
+            version=c.fetchone()['version']
+            bases={}
+            for kind,table in TABLES.items():
+                c.execute(f'SELECT * FROM {table} ORDER BY code')
+                bases[kind]=plain(c.fetchall())
+            c.execute('SELECT * FROM pricing_profiles ORDER BY code')
+            return dict(version=version,bases=bases,profiles=plain(c.fetchall()))
+
+    def sheets(self):
+        with self.transaction() as c:
+            c.execute('''SELECT r.id AS revision_id,r.number,r.status,r.created_at,r.author,
+              s.material_code,m.descricao,m.unidade_medida,r.data,
+              p.id AS snapshot_id,p.net_price,p.gross_price,p.reviewed_on
+              FROM pricing_sheets s JOIN materiais m ON m.codigo_material=s.material_code
+              JOIN pricing_revisions r ON r.sheet_id=s.id
+              LEFT JOIN LATERAL(SELECT * FROM pricing_prices WHERE revision_id=r.id ORDER BY id DESC LIMIT 1)p ON true
+              ORDER BY s.material_code,r.number DESC''')
+            return plain(c.fetchall())
 
     def version(self):
         with self.transaction() as c:

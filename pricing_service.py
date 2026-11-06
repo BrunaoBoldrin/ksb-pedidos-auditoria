@@ -92,11 +92,34 @@ class PricingService:
             c.execute(f"INSERT INTO {TABLES[kind]} ("+','.join(fields)+') VALUES('+','.join(['%s']*len(fields))+') RETURNING *',tuple(data[f] for f in fields))
         return plain(c.fetchone()),plain(old)
 
-    def _calculate(self,c,revision):
+    def _proposed_changes(self,c,data):
+        proposed=data.get('proposed_prices',[])
+        if not isinstance(proposed,list) or len(proposed)>500:raise PricingError('Propostas de preços inválidas.')
+        references={(line.get('kind'),int(line['base_id'])) for line in data.get('lines',[])}
+        changes={}
+        for proposal in proposed:
+            kind=proposal.get('kind');base_id=int(proposal['base_id'])
+            identity=(kind,base_id)
+            if kind not in TABLES or identity not in references:
+                raise PricingError('A proposta de preço deve pertencer a um custo usado na composição.')
+            c.execute(f'SELECT * FROM {TABLES[kind]} WHERE id=%s',(base_id,))
+            base=c.fetchone()
+            if not base:raise PricingError('Custo proposto não encontrado.')
+            if proposal.get('version') is None or int(proposal['version'])!=base['version']:
+                raise StalePreview('Um custo proposto mudou após a edição. Reabra a folha e confira o preço atual antes de salvar nova revisão.')
+            price=str(number(proposal.get('price'),'Preço proposto'))
+            if identity in changes and changes[identity]['price']!=price:
+                raise PricingError('O mesmo custo não pode ter dois preços propostos diferentes.')
+            changed=dict(base,price=price,reviewed_on=review_date(proposal.get('reviewed_on')))
+            changes[identity]=changed
+        return [(kind,data) for (kind,_),data in changes.items()]
+
+    def _calculate(self,c,revision,with_proposed=False):
         data=dict(revision['data'])
         if revision.get('profile_id'):
             c.execute('SELECT * FROM pricing_profiles WHERE id=%s',(revision['profile_id'],));profile=c.fetchone()
             if not profile:raise PricingError('Perfil de custos não encontrado.')
+            if not profile.get('active',True):raise PricingError('Perfil de cálculo bloqueado. Selecione um perfil ativo.')
             data.update(profile['data'])
             data['reviewed_on']=min(review_date(data['reviewed_on']),str(profile['reviewed_on']))
         bases={}
@@ -108,6 +131,8 @@ class PricingService:
                 c.execute(f'SELECT * FROM {TABLES[kind]} WHERE id=%s',(key[1],));base=c.fetchone()
                 if not base:raise PricingError('Custo base não encontrado.')
                 bases[key]=dict(base)
+        if with_proposed:
+            for kind,base in self._proposed_changes(c,data):bases[(kind,base['id'])]=base
         c.execute('SELECT ncm,unidade_medida FROM materiais WHERE codigo_material=%s',(revision['material_code'],))
         material=c.fetchone()
         if not material:raise PricingError('Item KSB não encontrado.')
@@ -225,6 +250,8 @@ class PricingService:
         if not isinstance(data.get('lines',[]),list) or len(data.get('lines',[]))>500:raise PricingError('Composição inválida ou acima de 500 linhas.')
         with self.repo.transaction() as c:
             self._lock(c,expected_version);self._require(c,actor,'edit')
+            if data.get('proposed_prices'):
+                self._require(c,actor,'costs');self._proposed_changes(c,data)
             c.execute('INSERT INTO pricing_sheets(material_code,created_by) VALUES(%s,%s) ON CONFLICT(material_code) DO UPDATE SET material_code=EXCLUDED.material_code RETURNING id',(code,actor))
             sid=c.fetchone()['id']
             c.execute('SELECT coalesce(max(number),0)+1 AS n FROM pricing_revisions WHERE sheet_id=%s',(sid,));n=c.fetchone()['n']
@@ -242,14 +269,14 @@ class PricingService:
         with self.repo.transaction() as c:
             c.execute('SELECT version FROM pricing_control WHERE id=1 FOR SHARE')
             self._require(c,actor,'view');revision=self._revision(c,revision_id)
-            result,context=self._calculate(c,revision)
+            result,context=self._calculate(c,revision,with_proposed=revision['status']=='DRAFT')
             return dict(calculation=result.snapshot(),fiscal_context=context)
 
     def preview_draft(self,code,data,actor,expected_version):
         with self.repo.transaction() as c:
             self._lock(c,expected_version);self._require(c,actor,'view')
             revision=dict(data=data,profile_id=data.get('profile_id'),material_code=code)
-            result,context=self._calculate(c,revision)
+            result,context=self._calculate(c,revision,with_proposed=True)
             return dict(calculation=result.snapshot(),fiscal_context=context)
 
     def preview_profile(self,code,data,reviewed_on,actor,expected_version):
@@ -279,10 +306,19 @@ class PricingService:
             self._lock(c,expected_version);rev=self._revision(c,revision_id)
             if rev['status']=='ARCHIVED':
                 raise PricingError('Copie a composição arquivada para um novo rascunho antes de publicar.')
+            changes=[]
+            if rev['status']=='DRAFT' and rev['data'].get('proposed_prices'):
+                self._require(c,actor,'costs')
+                changes=self._proposed_changes(c,rev['data'])
+                for kind,data in changes:
+                    result,old=self._write_base(c,kind,data)
+                    self._event(c,actor,'ALTERAR CUSTO PELA FOLHA',f'{kind}:{result["id"]}',dict(before=old,after=result,sheet_revision_id=rev['id']))
             self._calculate(c,rev)
             c.execute("UPDATE pricing_revisions SET status='ARCHIVED' WHERE sheet_id=%s AND status='ACTIVE'",(rev['sheet_id'],))
             c.execute("UPDATE pricing_revisions SET status='ACTIVE' WHERE id=%s",(revision_id,))
-            return self._publish_prices(c,[rev],actor,'ATIVAR FOLHA',key,fp)
+            affected={r['id']:r for r in self._dependents(c,changes)}
+            affected[rev['id']]=rev
+            return self._publish_prices(c,list(affected.values()),actor,'ATIVAR FOLHA',key,fp)
 
     def archive(self,code,actor,expected_version,reason,key):
         if not reason.strip():raise PricingError('Informe o motivo do arquivamento.')
