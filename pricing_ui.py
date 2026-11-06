@@ -58,6 +58,8 @@ def render_items(actor,can_edit=False,can_view=False):
         st.rerun()
     if cols[2].button('Abrir folha de processo',disabled=not code or not can_view):
         st.session_state.pricing_material_code=code
+        st.session_state.pricing_sheet_request=code
+        st.session_state.pricing_area='Folhas de processo'
         st.session_state.pagina_atual='💰 Precificação'
         st.rerun()
     if 'technical_values' in st.session_state:
@@ -118,99 +120,8 @@ def _show_calculation(data):
 
 
 def _sheet_tab(repo,service,actor,permissions,version):
-    items=pricing_items.list_items()
-    labels={r[0]:f'{r[0]} — {r[1]}' for r in items}
-    codes=list(labels)
-    initial=st.session_state.get('pricing_material_code')
-    code=st.selectbox('Item KSB da folha',codes,index=codes.index(initial) if initial in codes else None,
-                      format_func=lambda x:labels[x],placeholder='Pesquise pelo código ou descrição')
-    if not code:st.info('Selecione um item para consultar ou cadastrar sua folha.');return
-    st.session_state.pricing_material_code=code
-    revisions=repo.revisions(code)
-    by_id={r['id']:r for r in revisions}
-    rid=st.selectbox('Revisão para consultar ou copiar',[None]+list(by_id),
-                    format_func=lambda x:'Nova folha' if x is None else f'Revisão {by_id[x]["number"]} — '+{'DRAFT':'Rascunho','ACTIVE':'Ativa','ARCHIVED':'Arquivada'}[by_id[x]['status']],
-                    key=f'pricing_revision_{code}')
-    current=by_id.get(rid,{})
-    data=current.get('data',{})
-    if current:
-        c=st.columns(3)
-        if c[0].button('Conferir cálculo vigente da revisão'):
-            try:_show_calculation(service.preview_sheet(rid,actor)['calculation'])
-            except (ValueError,PermissionError) as exc:_error(exc)
-        if c[1].button('Publicar revisão / recalcular',disabled='publish' not in permissions or current['status']=='ARCHIVED'):
-            try:
-                service.activate(rid,actor,version,uuid4().hex);st.success('Preço da folha publicado.');st.rerun()
-            except (ValueError,PermissionError) as exc:_error(exc)
-        if current['status']=='ACTIVE':
-            reason=st.text_input('Motivo para arquivar a folha ativa',key=f'archive_reason_{code}')
-            confirm=st.checkbox('Ao arquivar, o item ficará sem preço comercial até nova ativação.',key=f'archive_confirm_{code}')
-            if st.button('Arquivar folha ativa',disabled='publish' not in permissions or not confirm or not reason.strip()):
-                try:service.archive(code,actor,version,reason,uuid4().hex);st.rerun()
-                except (ValueError,PermissionError) as exc:_error(exc)
-    catalogs={kind:repo.list_bases(kind) for kind in KINDS}
-    lookup={f'{KINDS[k]} | {b["code"]}':(k,b) for k,values in catalogs.items() for b in values}
-    reverse={(k,b['id']):label for label,(k,b) in lookup.items()}
-    profiles={p['id']:p for p in repo.list_profiles()}
-    rows=[]
-    for line in data.get('lines',[]):
-        rows.append({'Base':reverse.get((line['kind'],line['base_id']),''),'Quantidade':float(line.get('quantity',1)),
-          'Consumo':float(line.get('consumption',1)),'Unidade':line.get('unit','UN'),'Modo':line.get('mode','CONSUMO'),
-          'Blank C mm':float(line.get('blank_length',0)),'Blank L mm':float(line.get('blank_width',0)),
-          'Peça C mm':float(line.get('piece_length',0)),'Peça L mm':float(line.get('piece_width',0)),
-          'Horas':float(line.get('hours',0)),'Minutos':float(line.get('minutes',0)),'Pessoas':int(line.get('people',1))})
-    if not rows:rows=[dict(Base='',Quantidade=1.0,Consumo=1.0,Unidade='UN',Modo='CONSUMO',**{'Blank C mm':0.,'Blank L mm':0.,'Peça C mm':0.,'Peça L mm':0.,'Horas':0.,'Minutos':0.,'Pessoas':1})]
-    st.subheader('Composição de uma peça')
-    st.caption('Quantidade e consumo são por peça acabada. Em processos por hora, informe horas/minutos e pessoas. No modo BLANK, use as quatro dimensões. A simulação usa os custos atuais.')
-    with st.form(f'sheet_editor_{code}_{rid}'):
-        columns=st.columns(3)
-        drawing=columns[0].text_input('Código do desenho',value=data.get('drawing_code',''))
-        drawing_rev=columns[1].text_input('Revisão do desenho',value=data.get('drawing_revision',''))
-        source=columns[2].text_input('Referência da fonte',value=data.get('source',''))
-        chosen_profile=st.selectbox('Perfil compartilhado de cálculo',[None]+list(profiles),
-          index=([None]+list(profiles)).index(data.get('profile_id')) if data.get('profile_id') in profiles else 0,
-          format_func=lambda x:'Parâmetros desta folha' if x is None else profiles[x]['code'])
-        cols=st.columns(4)
-        margin=cols[0].number_input('Margem bruta (%)',0.,99.9999,float(Decimal(str(data.get('margin','0')))*100),format='%.4f')
-        taxes=cols[1].number_input('Impostos de venda (%)',0.,99.9999,float(Decimal(str(data.get('taxes','0')))*100),format='%.4f')
-        commission=cols[2].number_input('Comissão / taxa (%)',0.,99.9999,float(Decimal(str(data.get('commission','0')))*100),format='%.4f')
-        efficiency=cols[3].number_input('Eficiência (%)',0.0001,100.,float(Decimal(str(data.get('efficiency','1')))*100),format='%.4f')
-        if chosen_profile:st.caption('O perfil selecionado fornece eficiência, impostos de venda e arredondamento. Margem e comissão continuam próprias desta folha.')
-        cols=st.columns(3)
-        rounding=cols[0].selectbox('Arredondamento',list(ROUNDINGS),index=list(ROUNDINGS).index(data.get('rounding','CENT')),format_func=lambda x:ROUNDINGS[x])
-        reviewed=cols[1].date_input('Revisão da composição',value=date.fromisoformat(data['reviewed_on']) if data.get('reviewed_on') else today(),max_value=today())
-        tool_cost=cols[2].text_input('Amortização de ferramenta por peça (R$)',value=str(data.get('tool_cost','0')))
-        basis=st.selectbox('Base comercial do PV',list(BASES),index=list(BASES).index(data.get('basis','')),format_func=lambda x:BASES[x])
-        validated=st.checkbox('Conferi esta base de preço com o pedido KSB. O PV com impostos não receberá impostos em duplicidade.',value=data.get('confirmed') is True)
-        editor=st.data_editor(pd.DataFrame(rows),num_rows='dynamic',hide_index=True,width='stretch',
-          column_config={'Base':st.column_config.SelectboxColumn('Insumo / processo',options=list(lookup)),
-                         'Unidade':st.column_config.SelectboxColumn(options=UNITS),
-                         'Modo':st.column_config.SelectboxColumn(options=['CONSUMO','BLANK']),
-                         'Pessoas':st.column_config.NumberColumn(min_value=1,step=1)})
-        note=st.text_area('Observações / justificativa do ferramental',value=data.get('note',''))
-        c=st.columns(2)
-        simulate=c[0].form_submit_button('Simular composição')
-        save=c[1].form_submit_button('Salvar nova revisão em rascunho',disabled='edit' not in permissions)
-        if simulate or save:
-            lines=[]
-            for row in editor.fillna('').to_dict('records'):
-                if not row.get('Base'):continue
-                kind,base=lookup[row['Base']]
-                lines.append(dict(kind=kind,base_id=base['id'],quantity=str(row.get('Quantidade',1)),
-                    consumption=str(row.get('Consumo',1)),unit=row.get('Unidade') or base['unit'],mode=row.get('Modo') or 'CONSUMO',
-                    blank_length=str(row.get('Blank C mm',0)),blank_width=str(row.get('Blank L mm',0)),
-                    piece_length=str(row.get('Peça C mm',0)),piece_width=str(row.get('Peça L mm',0)),
-                    hours=str(row.get('Horas') or 0),minutes=str(row.get('Minutos') or 0),people=str(row.get('Pessoas') or 1)))
-            params=dict(lines=lines,margin=str(Decimal(str(margin))/100),taxes=str(Decimal(str(taxes))/100),
-                        commission=str(Decimal(str(commission))/100),efficiency=str(Decimal(str(efficiency))/100),
-                        rounding=rounding,reviewed_on=reviewed.isoformat(),tool_cost=tool_cost,basis=basis,confirmed=validated,
-                        drawing_code=drawing,drawing_revision=drawing_rev,source=source,note=note,profile_id=chosen_profile)
-            try:
-                if simulate:_show_calculation(service.preview_draft(code,params,actor,version)['calculation'])
-                if save:
-                    created=service.save_draft(code,params,actor,version)
-                    st.success(f'Rascunho da revisão {created["number"]} salvo. Selecione-o para conferir e publicar.')
-            except (ValueError,PermissionError) as exc:_error(exc)
+    from pricing_sheets_ui import render_sheets
+    render_sheets(actor,service)
 
 
 def _costs_tab(repo,service,actor,permissions,version):
