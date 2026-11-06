@@ -2,7 +2,9 @@
 import os
 import unittest
 import uuid
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 import psycopg2
 from psycopg2 import sql
@@ -28,7 +30,7 @@ class RepositoryTests(unittest.TestCase):
         with conn,conn.cursor() as c:
             c.execute('CREATE TABLE usuarios(id serial primary key,usuario text unique,nome text,perfil text,ativo int)')
             c.execute("INSERT INTO usuarios(usuario,nome,perfil,ativo) VALUES ('admin','Administrador','ADMIN',1),('venda','Vendas','VENDEDORA',1)")
-            c.execute('CREATE TABLE materiais(codigo_material text primary key,descricao text,ncm text,unidade_medida text,preco_revisado float,data_ultima_revisao text,usuario_ultima_revisao_preco text)')
+            c.execute('CREATE TABLE materiais(codigo_material text primary key,descricao text,material text,norma text,codigo_interno_jundiai text,codigo_interno_varzea text,ncm text,unidade_medida text,preco_revisado float,data_ultima_revisao text,usuario_ultima_revisao_preco text)')
             c.execute("INSERT INTO materiais(codigo_material,descricao,ncm,unidade_medida,preco_revisado) VALUES ('A','Teste A','123','UN',999),('B','Teste B','123','UN',999),('C','Teste C','123','UN',999)")
             c.execute('CREATE TABLE revisoes_preco(id serial primary key,codigo_material text,descricao_material text,preco_anterior numeric,preco_novo numeric,usuario text,origem text,criado_em timestamptz default now())')
             c.execute('CREATE TABLE regras_fiscais(id serial,ncm text,aliquota_icms float,aliquota_ipi float,observacao text,ativo int)')
@@ -169,6 +171,59 @@ class RepositoryTests(unittest.TestCase):
         self.service.archive('A','admin',self.repo.version(),'Fim da revisão',uuid.uuid4().hex)
         with self.assertRaises(PricingError):
             self.service.activate(rev['id'],'admin',self.repo.version(),uuid.uuid4().hex)
+
+    @contextmanager
+    def application_cursor(self,commit=False):
+        conn=self.connect()
+        try:
+            with conn,conn.cursor() as c:yield c
+        finally:conn.close()
+
+    def test_fiscal_edits_invalidate_prepared_cost_publication(self):
+        import database
+        self.activate(basis='GROSS')
+        data=self.repo.list_bases('component')[0];data['price']='110'
+        preview=self.service.preview_costs([('component',data)],'admin')
+        with patch('pricing_config.enabled',return_value=True),patch.object(database,'_cursor',self.application_cursor):
+            database.atualizar_regra_fiscal(1,'123',12,0,'Regra alterada',1)
+        with self.assertRaises(StalePreview):
+            self.service.publish_costs([('component',data)],'admin',preview['version'],'Teste',preview['key'])
+        self.assertEqual(self.repo.list_bases('component')[0]['price'],'100.000000000000')
+
+    def test_item_unit_or_ncm_edit_invalidates_profile_preview(self):
+        import database
+        import pricing_items
+        preview=self.service.preview_profile('Perfil',dict(efficiency='1',taxes='0.3',rounding='CENT'),'2026-11-06','admin',self.repo.version())
+        values=dict(codigo_material='A',descricao='Teste A',ncm='456',unidade_medida='KG')
+        with patch('pricing_config.enabled',return_value=True),patch.object(database,'_cursor',self.application_cursor):
+            pricing_items.save_item(values,'admin')
+        with self.assertRaises(StalePreview):
+            self.service.save_profile('Perfil',dict(efficiency='1',taxes='0.3',rounding='CENT'),'admin',preview['version'],'2026-11-06',preview['key'])
+
+    def test_profile_name_is_identical_in_preview_and_publication(self):
+        params=dict(efficiency='1',taxes='0.3',rounding='CENT')
+        self.service.save_profile('Teste',params,'admin',self.repo.version(),'2026-11-06',uuid.uuid4().hex)
+        self.activate(profile_id=self.repo.list_profiles()[0]['id'])
+        changed=dict(params,taxes='0.2')
+        preview=self.service.preview_profile('  Teste  ',changed,'2026-11-06','admin',self.repo.version())
+        self.assertEqual([x['code'] for x in preview['items']],['A'])
+        result=self.service.save_profile('  Teste  ',changed,'admin',preview['version'],'2026-11-06',preview['key'])
+        self.assertEqual(result['items'][0]['after'],preview['items'][0]['after'])
+        self.assertEqual(len(self.repo.list_profiles()),1)
+
+    def test_archive_event_retains_item_revision_and_reason_on_retry(self):
+        revision=self.activate()
+        version=self.repo.version()
+        key=uuid.uuid4().hex
+        first=self.service.archive('A','admin',version,'Mudou o desenho',key)
+        again=self.service.archive('A','admin',version,'Mudou o desenho',key)
+        self.assertEqual(first,again)
+        events=[e for e in self.repo.events() if e['action']=='ARQUIVAR FOLHA']
+        self.assertEqual(len(events),1)
+        details=events[0]['data']['details']
+        self.assertEqual(details['code'],'A')
+        self.assertEqual(details['reason'],'Mudou o desenho')
+        self.assertEqual(details['revisions'],[dict(id=revision['id'],number=revision['number'],previous_status='ACTIVE')])
 
 
 if __name__=='__main__': unittest.main()
