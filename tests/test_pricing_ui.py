@@ -17,7 +17,7 @@ class PricingScreensTests(unittest.TestCase):
         saved=[]
         def save(code,params,actor,version):saved.append(params);return dict(id=2,number=2)
         with patch.object(PricingRepository,'sheets',return_value=[row]),patch.object(PricingRepository,'catalog',return_value=snapshot), \
-             patch.object(CatalogService,'permissions',return_value={'view','edit'}),patch.object(CatalogService,'save_draft',side_effect=save):
+             patch.object(CatalogService,'permissions',return_value={'view','edit'}),patch.object(CatalogService,'save_draft',side_effect=save),patch.object(CatalogService,'preview_draft',side_effect=ValueError('Prévia indisponível na fixture')):
             app=AppTest.from_string('from pricing_sheets_ui import render_sheets\nrender_sheets("editor")',default_timeout=15).run()
             app.session_state['pricing_sheets_table']={'edited_rows':{0:{'Selecionar':True}},'added_rows':[],'deleted_rows':[]}
             app.run();next(x for x in app.button if x.label=='Editar folha').click().run()
@@ -31,7 +31,7 @@ class PricingScreensTests(unittest.TestCase):
             self.assertEqual(saved[0]['proposed_prices'],[])
             self.assertEqual(saved[0]['lines'][0]['base_id'],2)
 
-    def test_sheet_profile_switch_preserves_edited_margin_and_time(self):
+    def test_sheet_automatic_price_preserves_edited_margin_and_time(self):
         from pricing_repository import PricingRepository
         from pricing_catalog import CatalogService
         base=dict(id=1,code='MDO',description='Operação',unit='H',price='60',factor='1',active=True,per_person=True,reviewed_on='2026-11-06',version=1)
@@ -52,12 +52,13 @@ class PricingScreensTests(unittest.TestCase):
             grid=next(d for d in app.dataframe if 'Minutos' in d.value.columns)
             app.session_state[grid.key]={'edited_rows':{0:{'Minutos':25}},'added_rows':[],'deleted_rows':[]}
             next(b for b in app.button if b.label=='Simular composição').click().run()
-            next(s for s in app.selectbox if s.label=='Perfil compartilhado de cálculo').select(1).run()
+            self.assertFalse(any(s.label=='Perfil compartilhado de cálculo' for s in app.selectbox))
             next(b for b in app.button if b.label=='Simular composição').click().run()
             self.assertEqual(len(app.exception),0)
             self.assertEqual(payloads[-1]['margin'],'0.35')
             self.assertEqual(float(payloads[-1]['lines'][0]['minutes']),25)
-            self.assertEqual(payloads[-1]['efficiency'],'0.65')
+            self.assertEqual(payloads[-1]['efficiency'],'1.0')
+            self.assertTrue(any(m.label=='Preço unitário líquido KSB' for m in app.metric))
 
     def test_sheet_list_checkbox_opens_worksheet_and_can_edit_times_and_margin(self):
         from pricing_repository import PricingRepository
@@ -71,6 +72,7 @@ class PricingScreensTests(unittest.TestCase):
         with patch.object(PricingRepository,'sheets',return_value=[row]), \
              patch.object(PricingRepository,'catalog',return_value=snap), \
              patch.object(CatalogService,'permissions',return_value={'view','edit','publish','costs'}), \
+             patch.object(PricingService,'preview_draft',return_value=dict(calculation=calculation)), \
              patch.object(PricingService,'preview_sheet',return_value=dict(calculation=calculation)) as preview:
             app=AppTest.from_string('from pricing_sheets_ui import render_sheets\nrender_sheets("admin")',default_timeout=15).run()
             self.assertEqual(len(app.exception),0)
@@ -105,7 +107,7 @@ class PricingScreensTests(unittest.TestCase):
             self.assertEqual(len(app.dataframe),0)
             next(t for t in app.text_input if t.label=='PARAFUSO (R$/un)').set_value('13').run()
             next(t for t in app.text_input if t.label=='PORCA (R$/un)').set_value('3,50').run()
-            next(t for t in app.text_input if t.label=='Tributos de venda (%)').set_value('20').run()
+            self.assertFalse(any('Tributos de venda' in t.label for t in app.text_input))
             next(t for t in app.text_input if t.label=='Nome do novo campo').set_value('ARRUELA')
             next(t for t in app.text_input if t.label=='Preço inicial (R$)').set_value('4')
             next(b for b in app.button if b.label=='Adicionar campo').click().run()
@@ -119,7 +121,7 @@ class PricingScreensTests(unittest.TestCase):
             next(b for b in app.button if b.label=='Salvar alterações').click().run()
             self.assertEqual(len(app.exception),0)
             self.assertEqual([r['price'] for _,r in saved[0][0]],['13','3.50','4'])
-            self.assertEqual(saved[0][1][0]['data']['taxes'],'0.2')
+            self.assertEqual(saved[0][1],[])
             self.assertEqual(saved[0][2],8)
             self.assertTrue(any('2 itens' in s.value for s in app.success))
 
@@ -176,6 +178,7 @@ class PricingScreensTests(unittest.TestCase):
              patch.object(PricingRepository,'catalog',return_value=dict(version=8,bases=dict(material=[],component=[],process=[],service=[]),profiles=[])), \
              patch.object(CatalogService,'permissions',return_value={'view','edit','publish','costs'}), \
              patch.object(CatalogService,'save_draft',side_effect=save), \
+             patch.object(CatalogService,'preview_draft',side_effect=ValueError('Rascunho incompleto')), \
              patch.object(CatalogService,'preview_sheet',side_effect=ValueError('Rascunho incompleto')):
             app=AppTest.from_string('from pricing_sheets_ui import render_sheets\nrender_sheets("admin")',default_timeout=15)
             app.session_state['pricing_sheet_request']='001'
@@ -214,18 +217,19 @@ class PricingScreensTests(unittest.TestCase):
             self.assertTrue(next(c for c in app.checkbox if c.label=='Consultar custos e composição').value)
             self.assertEqual(next(t for t in app.text_input if t.label=='Usuário').value,'venda')
 
-    def test_profiles_have_independent_form_fields(self):
+    def test_pricing_navigation_uses_buttons_without_profile_page(self):
         from pricing_repository import PricingRepository
         from pricing_catalog import CatalogService
-        profiles=[dict(id=i,code=name,reviewed_on='2026-11-06',active=True,version=1,usage_count=0,data=dict(efficiency='1',taxes='0.3',rounding='CENT')) for i,name in [(1,'A'),(2,'B')]]
-        with patch.object(PricingRepository,'catalog',return_value=dict(version=0,bases=dict(material=[],component=[],process=[],service=[]),profiles=profiles)), \
-             patch.object(CatalogService,'permissions',return_value={'view','costs'}):
-            app=AppTest.from_string('from pricing_catalog_ui import render_catalog\nrender_catalog("editor",profiles_only=True)',default_timeout=15).run()
+        snapshot=dict(version=0,bases=dict(material=[],component=[],process=[],service=[]),profiles=[])
+        with patch.object(PricingRepository,'catalog',return_value=snapshot),patch.object(PricingRepository,'sheets',return_value=[]),patch.object(PricingRepository,'version',return_value=0),patch.object(CatalogService,'permissions',return_value={'view','costs'}):
+            app=AppTest.from_string('from pricing_ui import render_pricing\nrender_pricing("admin")',default_timeout=15).run()
             self.assertEqual(len(app.exception),0)
-            fields=[t for t in app.text_input if t.label=='Eficiência (%)']
-            fields[0].set_value('50').run()
-            fields=[t for t in app.text_input if t.label=='Eficiência (%)']
-            self.assertEqual([t.value for t in fields],['50','100'])
+            self.assertEqual(len(app.radio),0)
+            next(b for b in app.button if b.label=='Central de custos').click().run()
+            self.assertTrue(any(b.label=='Salvar alterações' for b in app.button))
+            self.assertFalse(any('perfil' in b.label.lower() for b in app.button))
+            next(b for b in app.button if b.label=='Folhas de processo').click().run()
+            self.assertTrue(any(b.label=='Nova folha' for b in app.button))
 
     def test_cost_editor_and_sheet_editor_render_with_empty_catalogs(self):
         class Repo:
@@ -246,13 +250,14 @@ class PricingScreensTests(unittest.TestCase):
              patch.object(PricingRepository,'list_bases',return_value=[]), \
              patch.object(PricingRepository,'list_profiles',return_value=[]), \
              patch.object(PricingRepository,'references',return_value=dict(version=0,items={})), \
-             patch.object(PricingRepository,'events',return_value=[]):
+             patch.object(PricingRepository,'events',return_value=[]), \
+             patch.object(PricingService,'preview_draft',side_effect=ValueError('Inclua uma composição')):
             app=AppTest.from_string('from pricing_ui import render_pricing\nrender_pricing("editor")',default_timeout=15).run()
             self.assertEqual(len(app.exception),0)
             next(b for b in app.button if b.label=='Nova folha').click().run()
             next(s for s in app.selectbox if s.label=='Item KSB da folha').select('001').run()
             self.assertEqual(len(app.exception),0)
-            self.assertTrue(any(s.label=='Base comercial do PV' for s in app.selectbox))
+            self.assertFalse(any(s.label=='Base comercial do PV' for s in app.selectbox))
 
     def test_item_form_and_table_have_no_price_and_save_only_technical_fields(self):
         saved=[]

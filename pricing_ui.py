@@ -119,34 +119,21 @@ def _show_calculation(data):
         st.dataframe(pd.DataFrame(detail),hide_index=True,width='stretch')
 
 
-def _sheet_tab(repo,service,actor,permissions,version):
-    from pricing_sheets_ui import render_sheets
-    render_sheets(actor,service)
-
-
-def _costs_tab(repo,service,actor,permissions,version):
-    from pricing_catalog import CatalogService
-    from pricing_catalog_ui import render_catalog
-    render_catalog(actor,CatalogService(repo))
-
-
-def _profiles_tab(repo,service,actor,permissions,version):
-    from pricing_catalog import CatalogService
-    from pricing_catalog_ui import render_catalog
-    render_catalog(actor,CatalogService(repo),profiles_only=True)
-
-
-def render_pricing(actor,review_days=90):
+def render_pricing(actor,review_days=90,permissions=None):
     from pricing_catalog import CatalogService
     page_header('Precificação','Folhas por peça e manutenção dos custos compartilhados.')
     service=CatalogService();repo=service.repo
-    try:permissions=service.permissions(actor)
+    try:permissions=service.permissions(actor) if permissions is None else permissions
     except PermissionError as exc:_error(exc);return
     if 'view' not in permissions:st.error('Você não tem autorização para consultar custos e composição.');return
-    area=st.radio('Área de precificação',['Folhas de processo','Central de custos','Perfis de cálculo','Revisões e pendências','Histórico'],horizontal=True,label_visibility='collapsed',key='pricing_area')
-    if area=='Folhas de processo':_sheet_tab(repo,service,actor,permissions,repo.version())
-    elif area=='Central de custos':_costs_tab(repo,service,actor,permissions,None)
-    elif area=='Perfis de cálculo':_profiles_tab(repo,service,actor,permissions,None)
+    from pricing_widgets import button_navigation
+    area=button_navigation(['Folhas de processo','Central de custos','Revisões e pendências','Histórico'],'pricing_area')
+    if area=='Folhas de processo':
+        from pricing_sheets_ui import render_sheets
+        render_sheets(actor,service,permissions)
+    elif area=='Central de custos':
+        from pricing_catalog_ui import render_catalog
+        render_catalog(actor,service,permissions)
     elif area=='Revisões e pendências':
         items=pricing_items.list_items();refs=repo.references([r[0] for r in items])['items']
         pending=[];active=0

@@ -100,7 +100,7 @@ class AppDesignTests(unittest.TestCase):
 
     def test_cached_batch_survives_filter_rerun_without_new_audit(self):
         at = self.cached_app()
-        at.radio(key="filtro_resultados").set_value("Com pendência").run()
+        at.button(key="filtro_resultados_Com pendência").click().run()
         self.assertEqual(len(at.exception), 0)
         html = "\n".join(m.value for m in at.markdown)
         self.assertIn("WGS-5520", html)

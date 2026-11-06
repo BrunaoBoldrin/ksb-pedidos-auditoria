@@ -1,5 +1,6 @@
 """Persistência PostgreSQL da precificação; nunca consulta preços legados como referência."""
 import json
+import re
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
@@ -62,7 +63,7 @@ class PricingRepository:
         with self.transaction() as c:
             c.execute('''SELECT r.id AS revision_id,r.number,r.status,r.created_at,r.author,
               s.material_code,m.descricao,m.unidade_medida,r.data,
-              p.id AS snapshot_id,p.net_price,p.gross_price,p.reviewed_on
+              p.id AS snapshot_id,p.net_price,p.gross_price,p.reviewed_on,p.fiscal_context
               FROM pricing_sheets s JOIN materiais m ON m.codigo_material=s.material_code
               JOIN pricing_revisions r ON r.sheet_id=s.id
               LEFT JOIN LATERAL(SELECT * FROM pricing_prices WHERE revision_id=r.id ORDER BY id DESC LIMIT 1)p ON true
@@ -123,8 +124,12 @@ class PricingRepository:
             if state=='ACTIVE' and context.get('unit') is not None and str(row['unidade_medida'])!=str(context['unit']):
                 state='UNIT_CHANGED'
             if state=='ACTIVE' and context.get('basis')=='GROSS':
-                if str(row['ncm'])!=context.get('ncm') or row['current_icms'] is None or Decimal(str(row['current_icms']))!=Decimal(str(context.get('icms'))):
+                if (re.sub(r'\D','',str(row['ncm'] or ''))!=context.get('ncm')
+                    or row['current_icms'] is None or row['current_ipi'] is None
+                    or Decimal(str(row['current_icms']))!=Decimal(str(context.get('icms')))
+                    or Decimal(str(row['current_ipi']))!=Decimal(str(context.get('ipi')))):
                     state='FISCAL_CHANGED'
+            if state=='ACTIVE' and context.get('source')!='NCM':state='FISCAL_CHANGED'
             items[row['codigo_material']]=dict(state=state,price=str(row['net_price']) if state=='ACTIVE' else None,
               gross_price=str(row['gross_price']) if state=='ACTIVE' else None,
               snapshot_id=row['snapshot_id'],revision_id=row['revision_id'],revision=row['number'],

@@ -18,8 +18,6 @@ from pricing_workspace import KINDS
 from ui_components import formatar_moeda_brl
 
 ROUNDINGS={'CENT':'Centavos','UP_REAL':'Para cima ao real inteiro'}
-BASES={'':'Selecione a base do PV','NET':'PV já é o preço líquido do pedido KSB',
-       'GROSS':'PV contém ICMS e PIS/COFINS, sem IPI'}
 STATUSES={'DRAFT':'Rascunho','ACTIVE':'Ativa','ARCHIVED':'Arquivada'}
 UNITS=['UN','KG','G','M','MM','M2','BAR','H']
 
@@ -35,14 +33,22 @@ def _open(repo,row,mode,code=None):
 
 
 def _summary(calculation):
-    c=st.columns(3)
+    c=st.columns(4)
     c[0].metric('Custo de uma peça',_money(calculation['cost']))
-    c[1].metric('PV da folha',_money(calculation['gross_price']))
-    c[2].metric('Preço líquido comparável KSB',_money(calculation['net_price']))
+    c[1].metric('Preço final unitário · sem IPI',_money(calculation['gross_price']))
+    c[2].metric('Preço unitário líquido KSB',_money(calculation['net_price']))
+    if calculation.get('total_with_ipi') is not None:
+        c[3].metric('Preço unitário · com IPI',_money(calculation['total_with_ipi']))
+    fiscal=calculation.get('fiscal_context') or {}
+    if fiscal.get('source')=='NCM':
+        st.caption(f'NCM {fiscal["ncm"]} · ICMS {fiscal["icms"]}% · PIS {fiscal["pis"]}% · COFINS {fiscal["cofins"]}% · IPI {fiscal["ipi"]}%. O líquido KSB é o valor unitário comparado ao pedido.')
+    st.caption('Revisão efetiva da composição: '+calculation['reviewed_on'])
+
+
+def _breakdown(calculation):
     labels={'material':'Matérias-primas','component':'Componentes','process':'Mão de obra com eficiência',
             'service':'Serviços externos','tool':'Ferramental por peça'}
     st.dataframe(pd.DataFrame([{'Composição do custo':label,'Valor por peça':_money(calculation['breakdown'][kind])} for kind,label in labels.items()]),hide_index=True,width='stretch')
-    st.caption('Revisão efetiva da composição: '+calculation['reviewed_on'])
 
 
 def _worksheet_header(opened,data):
@@ -61,9 +67,15 @@ def _view(opened,service,permissions):
     st.caption(f'Desenho: {data.get("drawing_code") or "—"} · Revisão do desenho: {data.get("drawing_revision") or "—"} · Fonte: {data.get("source") or "—"}')
     calculation=None
     try:
-        if row.get('snapshot_id'):calculation=service.repo.snapshot(row['snapshot_id'])
+        if row.get('snapshot_id') and row.get('status')=='ARCHIVED':calculation=service.repo.snapshot(row['snapshot_id'])
         elif row.get('revision_id'):calculation=service.preview_sheet(row['revision_id'],st.session_state.pricing_sheet_actor)['calculation']
     except (ValueError,PermissionError) as exc:st.warning(str(exc))
+    if calculation:
+        _summary(calculation)
+        if row.get('status')=='DRAFT':st.info('Prévia de uma peça. Este preço entra na análise comercial após publicar a revisão.')
+        elif row.get('status')=='ACTIVE' and calculation.get('fiscal_context')!=row.get('fiscal_context'):
+            st.warning('A regra fiscal mudou desde a publicação. Confira os preços atuais e publique novamente para atualizar a análise comercial.')
+    else:st.info('Preço final e líquido KSB pendentes. Corrija a informação indicada acima para concluir o cálculo.')
     catalog=opened['catalog']['bases']
     if calculation and calculation['lines']:
         catalog={kind:[] for kind in KINDS}
@@ -90,19 +102,20 @@ def _view(opened,service,permissions):
     c=st.columns(4)
     for col,key,label in zip(c,['margin','taxes','commission','efficiency'],['Margem bruta','Impostos de venda','Comissão / taxa','Eficiência']):
         col.metric(label,str((Decimal(str(values.get(key,'1' if key=='efficiency' else '0')))*100).normalize())+'%')
-    if calculation:_summary(calculation)
+    if calculation:_breakdown(calculation)
     if data.get('proposed_prices') and row.get('status')=='DRAFT':
         st.info('Esta revisão propõe alterar custos compartilhados. A publicação atualizará também as outras folhas que usam esses custos.')
     if data.get('note'):st.write(data['note'])
 
 
 def _edit(opened,service,actor,permissions):
-    row=opened['row'];data=row.get('data',{})
+    row=opened['row'];data={**row.get('data',{}),**opened.get('working_fields',{})}
     catalog=opened['catalog']['bases']
     if 'working_rows' not in opened:
         opened['working_rows']=sheet_rows(data,catalog,include_proposals=row.get('status')=='DRAFT')
         opened['grid_epochs']={kind:0 for kind in KINDS}
     _worksheet_header(opened,data)
+    price_area=st.container()
     if st.button('Atualizar preços da folha',key='refresh_sheet_'+opened['token']):
         fresh=service.repo.catalog()
         opened['catalog']=fresh;opened['version']=fresh['version'];catalog=fresh['bases']
@@ -110,16 +123,9 @@ def _edit(opened,service,actor,permissions):
             opened['working_rows'][kind]=normalize_rows(opened['working_rows'][kind],catalog[kind],refresh_prices=True)
             opened['grid_epochs'][kind]+=1
         opened.pop('calculation',None)
+        opened.pop('calculation_signature',None)
         st.rerun()
     st.caption('Atualizar preços carrega os valores centrais e descarta propostas de preço desta edição; tempos, consumos e margem são mantidos.')
-    profiles={p['id']:p for p in opened['catalog']['profiles'] if p.get('active',True) or p['id']==data.get('profile_id')}
-    options=[None]+list(profiles)
-    initial=data.get('profile_id') if data.get('profile_id') in profiles else None
-    profile_id=st.selectbox('Perfil compartilhado de cálculo',options,index=options.index(initial),
-                           format_func=lambda p:'Parâmetros desta folha' if p is None else profiles[p]['code'],key='sheet_profile_'+opened['token'])
-    effective={**data,**(profiles[profile_id]['data'] if profile_id is not None else {})}
-    profile_token=str(profile_id)+'_'+str(profiles[profile_id].get('version',0) if profile_id is not None else 0)
-    if profile_id is not None:st.caption('O perfil fornece eficiência, impostos e arredondamento. Os demais campos continuam próprios desta folha.')
     key=lambda name:'sheet_'+opened['token']+'_'+name
     cols=st.columns(3)
     drawing=cols[0].text_input('Código do desenho',value=data.get('drawing_code',''),key=key('drawing'))
@@ -154,50 +160,53 @@ def _edit(opened,service,actor,permissions):
     st.markdown('**FORMAÇÃO DO PREÇO — UMA PEÇA**')
     c=st.columns(4)
     margin=c[0].number_input('Margem bruta (%)',0.,99.9999,float(Decimal(str(data.get('margin','0')))*100),format='%.4f',key=key('margin'))
-    taxes=c[1].number_input('Impostos de venda (%)',0.,99.9999,float(Decimal(str(effective.get('taxes','0')))*100),format='%.4f',disabled=profile_id is not None,key=key('taxes_'+profile_token))
+    tax_area=c[1].empty()
     commission=c[2].number_input('Comissão / taxa (%)',0.,99.9999,float(Decimal(str(data.get('commission','0')))*100),format='%.4f',key=key('commission'))
-    efficiency=c[3].number_input('Eficiência (%)',0.0001,100.,float(Decimal(str(effective.get('efficiency','1')))*100),format='%.4f',disabled=profile_id is not None,key=key('efficiency_'+profile_token))
+    efficiency=c[3].number_input('Eficiência (%)',0.0001,100.,float(Decimal(str(data.get('efficiency','1')))*100),format='%.4f',key=key('efficiency'))
     c=st.columns(3)
     tool_cost=c[0].text_input('Ferramental por peça (R$)',value=str(data.get('tool_cost','0')),key=key('tool_cost'))
-    rounding=c[1].selectbox('Arredondamento',list(ROUNDINGS),index=list(ROUNDINGS).index(effective.get('rounding','CENT')),format_func=lambda name:ROUNDINGS[name],disabled=profile_id is not None,key=key('rounding_'+profile_token))
+    rounding=c[1].selectbox('Arredondamento',list(ROUNDINGS),index=list(ROUNDINGS).index(data.get('rounding','CENT')),format_func=lambda name:ROUNDINGS[name],key=key('rounding'))
     reviewed=c[2].date_input('Revisão da composição',value=date.fromisoformat(data['reviewed_on']) if data.get('reviewed_on') else _today(),max_value=_today(),key=key('reviewed'))
-    basis=st.selectbox('Base comercial do PV',list(BASES),index=list(BASES).index(data.get('basis','')),format_func=lambda name:BASES[name],key=key('basis'))
-    confirmed=st.checkbox('Conferi esta base comercial com o pedido KSB.',value=data.get('confirmed') is True,key=key('confirmed'))
     note=st.text_area('Observações da folha',value=data.get('note',''),key=key('note'))
     st.caption('Tempos, consumos e margem pertencem à folha. Preços propostos são aplicados aos custos compartilhados somente na publicação.')
-    fields=dict(profile_id=profile_id,margin=str(Decimal(str(margin))/100),taxes=str(Decimal(str(taxes))/100),commission=str(Decimal(str(commission))/100),
+    fields=dict(margin=str(Decimal(str(margin))/100),commission=str(Decimal(str(commission))/100),
                 efficiency=str(Decimal(str(efficiency))/100),tool_cost=tool_cost,rounding=rounding,
-                reviewed_on=reviewed.isoformat(),basis=basis,confirmed=confirmed,note=note,
+                reviewed_on=reviewed.isoformat(),tax_source='NCM',note=note,
                 drawing_code=drawing,drawing_revision=drawing_revision,source=source)
+    opened['working_fields']=deepcopy(fields)
     signature=json.dumps(dict(fields=fields,rows=edited),sort_keys=True)
     c=st.columns(2)
     simulate=c[0].button('Simular composição',key=key('simulate'))
     save=c[1].button('Salvar rascunho',type='primary',disabled='edit' not in permissions,key=key('save'))
-    if simulate or save:
+    if simulate or save or opened.get('calculation_signature')!=signature:
         try:
             lines,proposed=composition_from_rows(edited,catalog,_today())
             params=dict(fields,lines=lines,proposed_prices=proposed)
-            if simulate:
-                opened['calculation']=service.preview_draft(opened['code'],params,actor,opened['version'])['calculation']
-                opened['calculation_signature']=signature
-                opened['proposed_count']=len(proposed)
             if save:
                 result=service.save_draft(opened['code'],params,actor,opened['version'])
                 st.session_state.pricing_sheet_pending=dict(id=result['id'],code=opened['code'])
                 st.session_state.pricing_sheet_success='Rascunho salvo e selecionado. Confira a composição e publique quando estiver pronta.'
                 st.rerun()
-        except (ValueError,PermissionError) as exc:st.error(str(exc))
+            opened['calculation']=service.preview_draft(opened['code'],params,actor,opened['version'])['calculation']
+            opened['proposed_count']=len(proposed)
+            opened.pop('calculation_error',None)
+        except (ValueError,PermissionError) as exc:
+            opened.pop('calculation',None);opened['calculation_error']=str(exc)
+        opened['calculation_signature']=signature
     if refresh_needed:st.rerun()
-    if opened.get('calculation'):
-        if opened.get('calculation_signature')==signature:
+    with price_area:
+        if opened.get('calculation'):
             _summary(opened['calculation'])
+            st.caption('Prévia da edição. Salve o rascunho e publique a revisão para usar este preço na análise comercial.')
             if opened.get('proposed_count'):st.info(f'{opened["proposed_count"]} custo(s) compartilhado(s) proposto(s). A publicação recalculará seus dependentes.')
-        else:st.caption('Há alterações após a última simulação. Simule novamente para conferir o preço.')
+        else:st.warning(opened.get('calculation_error','Preencha a composição para calcular o preço.'))
+    taxes=(opened.get('calculation') or {}).get('parameters',{}).get('taxes')
+    tax_area.metric('Tributos na formação · NCM',str((Decimal(str(taxes))*100).normalize())+'%' if taxes is not None else 'Pendente')
 
 
-def render_sheets(actor,service=None):
+def render_sheets(actor,service=None,permissions=None):
     service=service or CatalogService();repo=service.repo
-    try:permissions=service.permissions(actor)
+    try:permissions=service.permissions(actor) if permissions is None else permissions
     except PermissionError as exc:st.error(str(exc));return
     if 'view' not in permissions:st.error('Você não tem autorização para consultar folhas.');return
     st.session_state.pricing_sheet_actor=actor
@@ -205,19 +214,20 @@ def render_sheets(actor,service=None):
     query=st.text_input('Pesquisar folha',placeholder='Código KSB, descrição ou desenho',key='pricing_sheet_search')
     rows=[{'ID':r['revision_id'],'Código KSB':r['material_code'],'Descrição':r['descricao'],
            'Revisão':r['number'],'Situação':STATUSES[r['status']],
-           'Desenho':r['data'].get('drawing_code',''),'PV da folha':_money(r.get('gross_price')) if r.get('gross_price') is not None else 'Não publicado',
+           'Desenho':r['data'].get('drawing_code',''),'Preço final sem IPI':_money(r.get('gross_price')) if r.get('gross_price') is not None else 'Ver prévia na folha',
+           'Líquido KSB':_money(r.get('net_price')) if r.get('net_price') is not None else 'Ver prévia na folha',
            'Revisão dos custos':r.get('reviewed_on') or '—'} for r in records]
-    table=pd.DataFrame(rows,columns=['ID','Código KSB','Descrição','Revisão','Situação','Desenho','PV da folha','Revisão dos custos'])
+    table=pd.DataFrame(rows,columns=['ID','Código KSB','Descrição','Revisão','Situação','Desenho','Preço final sem IPI','Líquido KSB','Revisão dos custos'])
     if query:table=table[table.astype(str).apply(lambda c:c.str.contains(query,case=False,regex=False)).any(axis=1)]
     selected=selected_rows(table,'pricing_sheets_table')
     chosen=by_id.get(int(selected.iloc[0]['ID'])) if len(selected)==1 else None
     c=st.columns(3)
     if c[0].button('Nova folha',disabled='edit' not in permissions):
-        st.session_state.pricing_sheet_open=_open(repo,None,'edit');st.rerun()
+        st.session_state.pricing_sheet_open=_open(repo,None,'edit')
     if c[1].button('Visualizar folha',disabled=chosen is None):
-        st.session_state.pricing_sheet_open=_open(repo,chosen,'view');st.rerun()
+        st.session_state.pricing_sheet_open=_open(repo,chosen,'view')
     if c[2].button('Editar folha',disabled=chosen is None or 'edit' not in permissions):
-        st.session_state.pricing_sheet_open=_open(repo,chosen,'edit');st.rerun()
+        st.session_state.pricing_sheet_open=_open(repo,chosen,'edit')
     pending=st.session_state.pop('pricing_sheet_pending',None)
     requested=st.session_state.pop('pricing_sheet_request',None)
     if pending:

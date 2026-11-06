@@ -31,10 +31,10 @@ class RepositoryTests(unittest.TestCase):
             c.execute('CREATE TABLE usuarios(id serial primary key,usuario text unique,nome text,perfil text,ativo int)')
             c.execute("INSERT INTO usuarios(usuario,nome,perfil,ativo) VALUES ('admin','Administrador','ADMIN',1),('venda','Vendas','VENDEDORA',1)")
             c.execute('CREATE TABLE materiais(codigo_material text primary key,descricao text,material text,norma text,codigo_interno_jundiai text,codigo_interno_varzea text,ncm text,unidade_medida text,preco_revisado float,data_ultima_revisao text,usuario_ultima_revisao_preco text)')
-            c.execute("INSERT INTO materiais(codigo_material,descricao,ncm,unidade_medida,preco_revisado) VALUES ('A','Teste A','123','UN',999),('B','Teste B','123','UN',999),('C','Teste C','123','UN',999)")
+            c.execute("INSERT INTO materiais(codigo_material,descricao,ncm,unidade_medida,preco_revisado) VALUES ('A','Teste A','12345678','UN',999),('B','Teste B','12345678','UN',999),('C','Teste C','12345678','UN',999)")
             c.execute('CREATE TABLE revisoes_preco(id serial primary key,codigo_material text,descricao_material text,preco_anterior numeric,preco_novo numeric,usuario text,origem text,criado_em timestamptz default now())')
             c.execute('CREATE TABLE regras_fiscais(id serial,ncm text,aliquota_icms float,aliquota_ipi float,observacao text,ativo int)')
-            c.execute("INSERT INTO regras_fiscais VALUES(1,'123',18,0,'teste',1)")
+            c.execute("INSERT INTO regras_fiscais VALUES(1,'12345678',18,0,'teste',1)")
         conn.close()
         self.repo=PricingRepository(connect)
         self.repo.migrate()
@@ -74,19 +74,19 @@ class RepositoryTests(unittest.TestCase):
         result=self.service.publish_costs([('component',data)],'admin',preview['version'],'motivo','unique-update')
         self.assertEqual(result['count'],2)
         refs=self.repo.references(['A','B','C'])['items']
-        self.assertEqual(refs['A']['price'],'220.00')
-        self.assertEqual(refs['B']['price'],'220.00')
+        self.assertEqual(refs['A']['price'],'150.43')
+        self.assertEqual(refs['B']['price'],'150.43')
         self.assertIsNone(refs['C']['price'])
-        self.assertEqual(self.repo.snapshot(old['snapshot_id'])['net_price'],'200.00')
+        self.assertEqual(self.repo.snapshot(old['snapshot_id'])['net_price'],'136.75')
         again=self.service.publish_costs([('component',data)],'admin',preview['version'],'motivo','unique-update')
         self.assertEqual(again['publication_id'],result['publication_id'])
 
     def test_draft_does_not_change_price_and_activation_archives_previous(self):
         self.activate()
         rev=self.service.save_draft('A',self.data(margin='0'),'admin',self.repo.version())
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'136.75')
         self.service.activate(rev['id'],'admin',self.repo.version(),uuid.uuid4().hex)
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'142.86')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'100.00')
         self.service.archive('A','admin',self.repo.version(),'Arquivar',uuid.uuid4().hex)
         self.assertIsNone(self.repo.references(['A'])['items']['A']['price'])
 
@@ -98,7 +98,7 @@ class RepositoryTests(unittest.TestCase):
             self.service.publish_costs([('component',data)],'admin',version,'teste',uuid.uuid4().hex)
         self.assertTrue(self.repo.list_bases('component')[0]['active'])
         self.assertEqual(self.repo.version(),version)
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'136.75')
 
     def test_stale_preview_is_rejected_even_for_different_cost_change(self):
         version=self.repo.version()
@@ -125,24 +125,41 @@ class RepositoryTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as pool: results=list(pool.map(save,['A','B']))
         self.assertCountEqual(results,['ok','stale'])
 
-    def test_unconfirmed_revision_cannot_replace_active_sheet(self):
+    def test_draft_uses_ncm_without_manual_base_confirmation(self):
         self.activate()
-        draft=self.service.save_draft('A',self.data(confirmed=False),'admin',self.repo.version())
-        with self.assertRaises(PricingError):
+        draft=self.service.save_draft('A',self.data(confirmed=False,basis='',taxes='.99'),'admin',self.repo.version())
+        self.assertEqual(self.service.preview_sheet(draft['id'],'admin')['calculation']['net_price'],'136.75')
+        self.service.activate(draft['id'],'admin',self.repo.version(),uuid.uuid4().hex)
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'136.75')
+
+    def test_ipi_change_blocks_reference_and_republication_preserves_old_snapshot(self):
+        rev=self.activate()
+        old=self.repo.references(['A'])['items']['A']
+        with self.repo.transaction() as c:c.execute('UPDATE regras_fiscais SET aliquota_ipi=6.5')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['state'],'FISCAL_CHANGED')
+        preview=self.service.preview_sheet(rev['id'],'admin')['calculation']
+        self.assertEqual(preview['total_with_ipi'],'195.70')
+        self.service.activate(rev['id'],'admin',self.repo.version(),uuid.uuid4().hex)
+        self.assertEqual(self.repo.snapshot(old['snapshot_id'])['total_with_ipi'],'183.76')
+
+    def test_invalid_ncm_prevents_publication_and_never_falls_back_to_legacy_price(self):
+        with self.repo.transaction() as c:c.execute("UPDATE materiais SET ncm='nan' WHERE codigo_material='A'")
+        draft=self.service.save_draft('A',self.data(),'admin',self.repo.version())
+        with self.assertRaisesRegex(PricingError,'NCM'):
             self.service.activate(draft['id'],'admin',self.repo.version(),uuid.uuid4().hex)
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
+        self.assertIsNone(self.repo.references(['A'])['items']['A']['price'])
 
     def test_fiscal_change_blocks_old_gross_reference_until_republication(self):
         rev=self.activate(basis='GROSS')
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'148.84')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'136.75')
         conn=self.connect()
         with conn,conn.cursor() as c:c.execute('UPDATE regras_fiscais SET aliquota_icms=12')
         conn.close()
         self.assertEqual(self.repo.references(['A'])['items']['A']['state'],'FISCAL_CHANGED')
         self.service.activate(rev['id'],'admin',self.repo.version(),uuid.uuid4().hex)
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'159.72')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'133.41')
 
-    def test_shared_profile_recalculates_current_sheets_and_keeps_old_snapshot(self):
+    def test_retired_profile_does_not_override_new_sheet_or_historical_snapshot(self):
         self.service.save_profile('Teste',dict(efficiency='1',taxes='0.3',rounding='CENT'),
                                   'admin',self.repo.version(),'2026-11-06',uuid.uuid4().hex)
         profile=self.repo.list_profiles()[0]
@@ -150,12 +167,12 @@ class RepositoryTests(unittest.TestCase):
         old=self.repo.references(['A'])['items']['A']
         preview=self.service.preview_profile('Teste',dict(efficiency='1',taxes='0.2',rounding='CENT'),
                                              '2026-11-06','admin',self.repo.version())
-        self.assertEqual(preview['items'][0]['after'],'166.67')
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
+        self.assertEqual(preview['items'],[])
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'136.75')
         self.service.save_profile('Teste',dict(efficiency='1',taxes='0.2',rounding='CENT'),
                                   'admin',preview['version'],'2026-11-06',preview['key'])
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'166.67')
-        self.assertEqual(self.repo.snapshot(old['snapshot_id'])['net_price'],'200.00')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'136.75')
+        self.assertEqual(self.repo.snapshot(old['snapshot_id'])['net_price'],'136.75')
 
     def test_changing_item_unit_requires_republication(self):
         self.activate()
@@ -185,7 +202,7 @@ class RepositoryTests(unittest.TestCase):
         data=self.repo.list_bases('component')[0];data['price']='110'
         preview=self.service.preview_costs([('component',data)],'admin')
         with patch('pricing_config.enabled',return_value=True),patch.object(database,'_cursor',self.application_cursor):
-            database.atualizar_regra_fiscal(1,'123',12,0,'Regra alterada',1)
+            database.atualizar_regra_fiscal(1,'12345678',12,0,'Regra alterada',1)
         with self.assertRaises(StalePreview):
             self.service.publish_costs([('component',data)],'admin',preview['version'],'Teste',preview['key'])
         self.assertEqual(self.repo.list_bases('component')[0]['price'],'100.000000000000')
@@ -194,7 +211,7 @@ class RepositoryTests(unittest.TestCase):
         import database
         import pricing_items
         preview=self.service.preview_profile('Perfil',dict(efficiency='1',taxes='0.3',rounding='CENT'),'2026-11-06','admin',self.repo.version())
-        values=dict(codigo_material='A',descricao='Teste A',ncm='456',unidade_medida='KG')
+        values=dict(codigo_material='A',descricao='Teste A',ncm='87654321',unidade_medida='KG')
         with patch('pricing_config.enabled',return_value=True),patch.object(database,'_cursor',self.application_cursor):
             pricing_items.save_item(values,'admin')
         with self.assertRaises(StalePreview):
@@ -206,9 +223,9 @@ class RepositoryTests(unittest.TestCase):
         self.activate(profile_id=self.repo.list_profiles()[0]['id'])
         changed=dict(params,taxes='0.2')
         preview=self.service.preview_profile('  Teste  ',changed,'2026-11-06','admin',self.repo.version())
-        self.assertEqual([x['code'] for x in preview['items']],['A'])
+        self.assertEqual(preview['items'],[])
         result=self.service.save_profile('  Teste  ',changed,'admin',preview['version'],'2026-11-06',preview['key'])
-        self.assertEqual(result['items'][0]['after'],preview['items'][0]['after'])
+        self.assertEqual(result['items'],[])
         self.assertEqual(len(self.repo.list_profiles()),1)
 
     def test_archive_event_retains_item_revision_and_reason_on_retry(self):

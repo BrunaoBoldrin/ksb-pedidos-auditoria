@@ -293,7 +293,8 @@ def exibir_cards_auditoria(df_analise_final):
     st.subheader("Resultado por pedido")
     filtro_col, pedido_col = st.columns([2, 1])
     with filtro_col:
-        filtro = st.radio("Exibir itens", ["Todos", "Com pendência", "Aprovados"], horizontal=True, key="filtro_resultados")
+        from pricing_widgets import button_navigation
+        filtro = button_navigation(["Todos", "Com pendência", "Aprovados"], "filtro_resultados")
     with pedido_col:
         pedido = st.selectbox("Pedido", ["Todos"] + pedidos_unicos(df_analise_final), key="filtro_pedido_resultados")
     visiveis = filtrar_itens(df_analise_final, filtro, pedido)
@@ -848,7 +849,7 @@ if menu == "📄 Análise de Pedidos KSB":
 
 elif menu == '💰 Precificação':
     from pricing_ui import render_pricing
-    render_pricing(st.session_state.usuario_logado, configuracoes_sistema.price_review_days)
+    render_pricing(st.session_state.usuario_logado, configuracoes_sistema.price_review_days, pricing_permissions)
 
 elif menu == "📦 Itens Cadastrados":
     if dynamic_pricing_enabled():
