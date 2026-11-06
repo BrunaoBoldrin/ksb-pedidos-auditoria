@@ -87,12 +87,12 @@ class PricingScreensTests(unittest.TestCase):
             self.assertEqual(len(app.exception),0)
             self.assertTrue(any(n.label=='Margem bruta (%)' for n in app.number_input))
             self.assertTrue(any('Minutos' in d.value.columns for d in app.dataframe))
-    def test_unified_grid_saves_two_costs_and_profile_with_one_action(self):
+    def test_unified_form_keeps_edits_adds_field_and_saves_all_once(self):
         from pricing_catalog import CatalogService
         from pricing_repository import PricingRepository
-        def base(id,code,price):return dict(id=id,code=code,description=code,unit='UN',price=price,factor='1',reviewed_on='2026-11-01',active=True,per_person=True,version=1,note='')
+        def base(id,code,price):return dict(id=id,code=code,description=code,unit='UN',price=price,factor='1',reviewed_on='2026-11-01',active=True,per_person=True,version=1,note='',usage_count=0)
         snapshot=dict(version=8,bases=dict(component=[base(1,'PARAFUSO','10'),base(2,'PORCA','2')],material=[],process=[],service=[]),
-                      profiles=[dict(id=1,code='GERAL',data=dict(efficiency='1',taxes='0.3',rounding='CENT'),active=True,reviewed_on='2026-11-01',version=1)])
+                      profiles=[dict(id=1,code='GERAL',data=dict(efficiency='1',taxes='0.3',rounding='CENT'),active=True,reviewed_on='2026-11-01',version=1,usage_count=0)])
         saved=[]
         def publish(changes,profiles,deletions,actor,version,reason,key):
             saved.append((changes,profiles,version));return dict(count=2)
@@ -102,21 +102,68 @@ class PricingScreensTests(unittest.TestCase):
             source='import streamlit as st\nfrom pricing_catalog_ui import render_catalog\narea=st.radio("Tela",["Central","Outra"],key="central_test_route")\nif area=="Central":render_catalog("admin")'
             app=AppTest.from_string(source,default_timeout=15).run()
             self.assertEqual(len(app.exception),0)
-            app.session_state['catalog_costs_admin_all_0']={'edited_rows':{0:{'Preço (R$)':'13'}},'added_rows':[],'deleted_rows':[]}
-            app.run()
-            app.session_state['catalog_costs_admin_all_0']={'edited_rows':{0:{'Preço (R$)':'13'},1:{'Preço (R$)':'3,50'}},'added_rows':[],'deleted_rows':[]}
-            app.session_state['catalog_profiles_admin_all_0']={'edited_rows':{0:{'Impostos (%)':'20'}},'added_rows':[],'deleted_rows':[]}
-            app.button(key='new_cost').click().run()
-            self.assertEqual(app.dataframe[1].value.iloc[0]['Impostos (%)'],'20')
+            self.assertEqual(len(app.dataframe),0)
+            next(t for t in app.text_input if t.label=='PARAFUSO (R$/un)').set_value('13').run()
+            next(t for t in app.text_input if t.label=='PORCA (R$/un)').set_value('3,50').run()
+            next(t for t in app.text_input if t.label=='Tributos de venda (%)').set_value('20').run()
+            next(t for t in app.text_input if t.label=='Nome do novo campo').set_value('ARRUELA')
+            next(t for t in app.text_input if t.label=='Preço inicial (R$)').set_value('4')
+            next(b for b in app.button if b.label=='Adicionar campo').click().run()
+            self.assertEqual(len(app.exception),0)
+            self.assertEqual(next(t for t in app.text_input if t.label=='PARAFUSO (R$/un)').value,'13')
+            self.assertTrue(any(t.label=='ARRUELA (R$/un)' for t in app.text_input))
+            self.assertEqual(saved,[])
             app.radio(key='central_test_route').set_value('Outra').run()
             app.radio(key='central_test_route').set_value('Central').run()
-            self.assertEqual(app.dataframe[0].value.iloc[0]['Preço (R$)'],'13')
+            self.assertEqual(next(t for t in app.text_input if t.label=='PORCA (R$/un)').value,'3,50')
             next(b for b in app.button if b.label=='Salvar alterações').click().run()
             self.assertEqual(len(app.exception),0)
-            self.assertEqual([r['price'] for _,r in saved[0][0]],['13','3.50'])
+            self.assertEqual([r['price'] for _,r in saved[0][0]],['13','3.50','4'])
             self.assertEqual(saved[0][1][0]['data']['taxes'],'0.2')
             self.assertEqual(saved[0][2],8)
             self.assertTrue(any('2 itens' in s.value for s in app.success))
+
+    def test_referenced_form_field_cannot_be_removed_but_its_price_is_editable(self):
+        from pricing_catalog import CatalogService
+        from pricing_repository import PricingRepository
+        base=dict(id=1,code='PARAFUSO',description='Parafuso X',unit='UN',price='10',factor='1',active=True,per_person=True,version=1,reviewed_on='2026-11-01',note='',usage_count=2)
+        with patch.object(PricingRepository,'catalog',return_value=dict(version=8,bases=dict(component=[base],material=[],process=[],service=[]),profiles=[])), \
+             patch.object(CatalogService,'permissions',return_value={'view','costs'}):
+            app=AppTest.from_string('from pricing_catalog_ui import render_catalog\nrender_catalog("admin")',default_timeout=15).run()
+            self.assertEqual(len(app.exception),0)
+            self.assertFalse(next(t for t in app.text_input if t.label=='Parafuso X (R$/un)').disabled)
+            self.assertTrue(next(c for c in app.checkbox if c.label=='Remover campo').disabled)
+            self.assertTrue(any('vinculado' in c.value.lower() for c in app.caption))
+
+    def test_free_form_field_removal_is_sent_only_on_save(self):
+        from pricing_catalog import CatalogService
+        from pricing_repository import PricingRepository
+        base=dict(id=1,code='LIVRE',description='Campo livre',unit='UN',price='10',factor='1',active=True,per_person=True,version=1,reviewed_on='2026-11-01',note='',usage_count=0)
+        saved=[]
+        def publish(changes,profiles,deletions,actor,version,reason,key):
+            saved.append(deletions);return dict(count=0)
+        with patch.object(PricingRepository,'catalog',return_value=dict(version=8,bases=dict(component=[base],material=[],process=[],service=[]),profiles=[])), \
+             patch.object(CatalogService,'permissions',return_value={'view','costs'}), \
+             patch.object(CatalogService,'publish_catalog',side_effect=publish):
+            app=AppTest.from_string('from pricing_catalog_ui import render_catalog\nrender_catalog("admin")',default_timeout=15).run()
+            next(c for c in app.checkbox if c.label=='Remover campo').check().run()
+            self.assertEqual(saved,[])
+            next(b for b in app.button if b.label=='Salvar alterações').click().run()
+            self.assertEqual(len(app.exception),0)
+            self.assertEqual(saved,[[('component',1)]])
+
+    def test_invalid_form_value_is_retained_after_save_failure(self):
+        from pricing_catalog import CatalogService
+        from pricing_repository import PricingRepository
+        base=dict(id=1,code='P',description='Parafuso',unit='UN',price='10',factor='1',active=True,per_person=True,version=1,reviewed_on='2026-11-01',note='',usage_count=0)
+        with patch.object(PricingRepository,'catalog',return_value=dict(version=8,bases=dict(component=[base],material=[],process=[],service=[]),profiles=[])), \
+             patch.object(CatalogService,'permissions',return_value={'view','costs'}):
+            app=AppTest.from_string('from pricing_catalog_ui import render_catalog\nrender_catalog("admin")',default_timeout=15).run()
+            next(t for t in app.text_input if t.label=='Parafuso (R$/un)').set_value('inválido').run()
+            next(b for b in app.button if b.label=='Salvar alterações').click().run()
+            self.assertEqual(len(app.exception),0)
+            self.assertEqual(next(t for t in app.text_input if t.label=='Parafuso (R$/un)').value,'inválido')
+            self.assertTrue(app.error)
 
     def test_saved_draft_opens_immediately_for_review_without_manual_refresh(self):
         from pricing_repository import PricingRepository
@@ -167,20 +214,18 @@ class PricingScreensTests(unittest.TestCase):
             self.assertTrue(next(c for c in app.checkbox if c.label=='Consultar custos e composição').value)
             self.assertEqual(next(t for t in app.text_input if t.label=='Usuário').value,'venda')
 
-    def test_switching_profile_does_not_reuse_another_profiles_unsaved_values(self):
+    def test_profiles_have_independent_form_fields(self):
         from pricing_repository import PricingRepository
         from pricing_catalog import CatalogService
-        profiles=[dict(id=i,code=name,reviewed_on='2026-11-06',active=True,version=1,data=dict(efficiency='1',taxes='0.3',rounding='CENT')) for i,name in [(1,'A'),(2,'B')]]
+        profiles=[dict(id=i,code=name,reviewed_on='2026-11-06',active=True,version=1,usage_count=0,data=dict(efficiency='1',taxes='0.3',rounding='CENT')) for i,name in [(1,'A'),(2,'B')]]
         with patch.object(PricingRepository,'catalog',return_value=dict(version=0,bases=dict(material=[],component=[],process=[],service=[]),profiles=profiles)), \
              patch.object(CatalogService,'permissions',return_value={'view','costs'}):
             app=AppTest.from_string('from pricing_catalog_ui import render_catalog\nrender_catalog("editor",profiles_only=True)',default_timeout=15).run()
             self.assertEqual(len(app.exception),0)
-            app.session_state['catalog_profiles_editor_profiles_0']={'edited_rows':{0:{'Eficiência (%)':'50'},1:{'Selecionar':True}},'added_rows':[],'deleted_rows':[]}
-            app.run()
-            app.button(key='edit_profile').click().run()
-            self.assertEqual(len(app.exception),0)
-            self.assertEqual(next(t for t in app.text_input if t.label=='Perfil').value,'B')
-            self.assertEqual(next(t for t in app.text_input if t.label=='Eficiência (%)').value,'100')
+            fields=[t for t in app.text_input if t.label=='Eficiência (%)']
+            fields[0].set_value('50').run()
+            fields=[t for t in app.text_input if t.label=='Eficiência (%)']
+            self.assertEqual([t.value for t in fields],['50','100'])
 
     def test_cost_editor_and_sheet_editor_render_with_empty_catalogs(self):
         class Repo:

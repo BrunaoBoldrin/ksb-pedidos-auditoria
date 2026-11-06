@@ -105,6 +105,15 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(rows[0]['revision_id'],revision['id'])
         self.assertEqual(rows[0]['net_price'],'200.00')
 
+    def test_catalog_usage_counts_include_archived_and_draft_links(self):
+        self.activate()
+        self.service.archive('A','admin',self.repo.version(),'Histórico',self.key())
+        self.service.save_draft('B',self.data(),'admin',self.repo.version())
+        snapshot=self.repo.catalog()
+        self.assertEqual(snapshot['bases']['component'][0]['usage_count'],2)
+        with self.assertRaises(PricingError):
+            self.catalog.publish_catalog([],[],[('component',self.base['id'])],'admin',self.repo.version(),'Excluir',self.key())
+
     def test_blocked_profile_cannot_be_used_to_publish_new_sheet(self):
         profile=dict(code='Bloqueado',data=dict(efficiency='1',taxes='0.3',rounding='CENT'),reviewed_on='2026-11-06',active=False)
         self.catalog.publish_catalog([],[profile],[],'admin',self.repo.version(),'Novo bloqueado',self.key())
