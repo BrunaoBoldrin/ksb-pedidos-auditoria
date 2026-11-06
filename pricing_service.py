@@ -97,6 +97,7 @@ class PricingService:
         if revision.get('profile_id'):
             c.execute('SELECT * FROM pricing_profiles WHERE id=%s',(revision['profile_id'],));profile=c.fetchone()
             if not profile:raise PricingError('Perfil de custos não encontrado.')
+            if not profile.get('active',True):raise PricingError('Perfil de cálculo bloqueado. Selecione um perfil ativo.')
             data.update(profile['data'])
             data['reviewed_on']=min(review_date(data['reviewed_on']),str(profile['reviewed_on']))
         bases={}
