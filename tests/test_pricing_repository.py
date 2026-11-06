@@ -65,6 +65,25 @@ class RepositoryTests(unittest.TestCase):
         self.assertIsNone(refs['items']['A']['price'])
         self.assertEqual(refs['items']['A']['state'],'MISSING')
 
+    def test_retiring_profiles_freezes_effective_parameters_once_without_touching_snapshots(self):
+        self.service.save_profile('Legacy',dict(efficiency='.5',taxes='.3',rounding='UP_REAL'),'admin',self.repo.version(),'2026-11-06',uuid.uuid4().hex)
+        pid=self.repo.list_profiles()[0]['id']
+        rev=self.activate()
+        old=self.repo.references(['A'])['items']['A']
+        snapshot=self.repo.snapshot(old['snapshot_id'])
+        with self.repo.transaction() as c:
+            c.execute("UPDATE pricing_revisions SET profile_id=%s,data=data || '{\"efficiency\":\"1\",\"rounding\":\"CENT\"}'::jsonb WHERE id=%s",(pid,rev['id']))
+            # Simulate the pre-migration state inside this isolated test schema.
+            c.execute('DROP TABLE IF EXISTS pricing_schema_migrations')
+        self.repo.migrate()
+        migrated=self.repo.revisions('A')[0]
+        self.assertEqual(migrated['data']['efficiency'],'0.5')
+        self.assertEqual(migrated['data']['rounding'],'UP_REAL')
+        self.assertEqual(self.repo.snapshot(old['snapshot_id']),snapshot)
+        with self.repo.transaction() as c:c.execute("UPDATE pricing_revisions SET data=data || '{\"efficiency\":\".8\"}'::jsonb WHERE id=%s",(rev['id'],))
+        self.repo.migrate()
+        self.assertEqual(self.repo.revisions('A')[0]['data']['efficiency'],'.8')
+
     def test_shared_cost_updates_only_dependents_and_preserves_snapshot(self):
         self.activate('A');self.activate('B')
         old=self.repo.references(['A'])['items']['A']

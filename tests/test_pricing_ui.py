@@ -1,4 +1,5 @@
 import unittest
+from copy import deepcopy
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
@@ -6,6 +7,37 @@ import pricing_items
 
 
 class PricingScreensTests(unittest.TestCase):
+    def test_returning_to_editor_refreshes_changed_ncm_and_costs_without_losing_edits(self):
+        from pricing_repository import PricingRepository
+        from pricing_catalog import CatalogService
+        base=dict(id=1,code='C',description='Componente',unit='UN',price='10',factor='1',active=True,version=1,reviewed_on='2026-11-06')
+        data=dict(lines=[dict(kind='component',base_id=1)],margin='.2',efficiency='1',commission='0',rounding='CENT',reviewed_on='2026-11-06')
+        row=dict(revision_id=1,number=1,status='DRAFT',material_code='001',descricao='Teste',data=data)
+        snapshot=dict(version=8,bases=dict(material=[],component=[base],process=[],service=[]),profiles=[])
+        result=dict(cost='10',gross_price='12.50',net_price='12.50',reviewed_on='2026-11-06',lines=[],parameters={'taxes':'0'},breakdown={k:'0' for k in ['material','component','process','service','tool']})
+        sent=[]
+        def preview(code,params,actor,version):
+            sent.append(params)
+            if snapshot['version']==9:raise ValueError('NCM inválido')
+            return dict(calculation=dict(result,net_price='16.25' if snapshot['version']==10 else '12.50'))
+        with patch.object(PricingRepository,'version',side_effect=lambda:snapshot['version']),patch.object(PricingRepository,'catalog',side_effect=lambda:deepcopy(snapshot)),patch.object(PricingRepository,'sheets',return_value=[row]),patch.object(CatalogService,'permissions',return_value={'view','edit','costs'}),patch.object(CatalogService,'preview_draft',side_effect=preview):
+            app=AppTest.from_string('from pricing_ui import render_pricing\nrender_pricing("admin")',default_timeout=15).run()
+            app.session_state['pricing_sheets_table']={'edited_rows':{0:{'Selecionar':True}},'added_rows':[],'deleted_rows':[]}
+            app.run();next(b for b in app.button if b.label=='Editar folha').click().run()
+            next(n for n in app.number_input if n.label=='Margem bruta (%)').set_value(35).run()
+            snapshot['version']=9
+            next(b for b in app.button if b.label=='Central de custos').click().run()
+            next(b for b in app.button if b.label=='Folhas de processo').click().run()
+            self.assertEqual(len(app.exception),0)
+            self.assertFalse(any(m.label=='Preço unitário líquido KSB' for m in app.metric))
+            self.assertTrue(any('NCM' in w.value for w in app.warning))
+            self.assertEqual(next(n for n in app.number_input if n.label=='Margem bruta (%)').value,35)
+            snapshot['version']=10;base.update(price='13',version=2)
+            app.run()
+            self.assertEqual(next(m for m in app.metric if m.label=='Preço unitário líquido KSB').value,'R$ 16,25')
+            self.assertEqual(sent[-1]['proposed_prices'],[])
+            self.assertEqual(next(n for n in app.number_input if n.label=='Margem bruta (%)').value,35)
+
     def test_switching_sheet_base_loads_new_cost_without_proposing_global_price_change(self):
         from pricing_repository import PricingRepository
         from pricing_catalog import CatalogService
@@ -16,7 +48,7 @@ class PricingScreensTests(unittest.TestCase):
         snapshot=dict(version=8,bases=dict(material=[],component=[a,b],process=[],service=[]),profiles=[])
         saved=[]
         def save(code,params,actor,version):saved.append(params);return dict(id=2,number=2)
-        with patch.object(PricingRepository,'sheets',return_value=[row]),patch.object(PricingRepository,'catalog',return_value=snapshot), \
+        with patch.object(PricingRepository,'version',return_value=8),patch.object(PricingRepository,'sheets',return_value=[row]),patch.object(PricingRepository,'catalog',return_value=snapshot), \
              patch.object(CatalogService,'permissions',return_value={'view','edit'}),patch.object(CatalogService,'save_draft',side_effect=save),patch.object(CatalogService,'preview_draft',side_effect=ValueError('Prévia indisponível na fixture')):
             app=AppTest.from_string('from pricing_sheets_ui import render_sheets\nrender_sheets("editor")',default_timeout=15).run()
             app.session_state['pricing_sheets_table']={'edited_rows':{0:{'Selecionar':True}},'added_rows':[],'deleted_rows':[]}
@@ -42,7 +74,7 @@ class PricingScreensTests(unittest.TestCase):
         calculation=dict(cost='10',gross_price='12.50',net_price='12.50',reviewed_on='2026-11-06',breakdown=dict(material='0',component='0',process='10',service='0',tool='0'),lines=[])
         payloads=[]
         def preview(code,params,actor,version):payloads.append(params);return dict(calculation=calculation)
-        with patch.object(PricingRepository,'sheets',return_value=[row]),patch.object(PricingRepository,'catalog',return_value=snapshot), \
+        with patch.object(PricingRepository,'version',return_value=8),patch.object(PricingRepository,'sheets',return_value=[row]),patch.object(PricingRepository,'catalog',return_value=snapshot), \
              patch.object(CatalogService,'permissions',return_value={'view','edit','costs'}), \
              patch.object(CatalogService,'preview_draft',side_effect=preview):
             app=AppTest.from_string('from pricing_sheets_ui import render_sheets\nrender_sheets("admin")',default_timeout=15).run()
@@ -69,7 +101,7 @@ class PricingScreensTests(unittest.TestCase):
         row=dict(revision_id=1,number=1,status='DRAFT',material_code='001',descricao='Peça teste',unidade_medida='UN',data=data,snapshot_id=None,net_price=None,gross_price=None,reviewed_on=None)
         snap=dict(version=8,bases=dict(material=[],component=[],process=[base],service=[]),profiles=[])
         calculation=dict(cost='10',gross_price='12.50',net_price='12.50',reviewed_on='2026-11-06',breakdown=dict(material='0',component='0',process='10',service='0',tool='0'),lines=[])
-        with patch.object(PricingRepository,'sheets',return_value=[row]), \
+        with patch.object(PricingRepository,'version',return_value=8),patch.object(PricingRepository,'sheets',return_value=[row]), \
              patch.object(PricingRepository,'catalog',return_value=snap), \
              patch.object(CatalogService,'permissions',return_value={'view','edit','publish','costs'}), \
              patch.object(PricingService,'preview_draft',return_value=dict(calculation=calculation)), \
@@ -174,7 +206,7 @@ class PricingScreensTests(unittest.TestCase):
         def save(code,data,actor,version):
             records.append(dict(revision_id=42,number=1,status='DRAFT',material_code=code,descricao='Peça teste',unidade_medida='UN',data=data,snapshot_id=None,net_price=None,gross_price=None,reviewed_on=None))
             return dict(id=42,number=1)
-        with patch.object(PricingRepository,'sheets',side_effect=lambda:records), \
+        with patch.object(PricingRepository,'version',return_value=8),patch.object(PricingRepository,'sheets',side_effect=lambda:records), \
              patch.object(PricingRepository,'catalog',return_value=dict(version=8,bases=dict(material=[],component=[],process=[],service=[]),profiles=[])), \
              patch.object(CatalogService,'permissions',return_value={'view','edit','publish','costs'}), \
              patch.object(CatalogService,'save_draft',side_effect=save), \

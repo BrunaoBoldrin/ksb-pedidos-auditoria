@@ -101,7 +101,8 @@ def _view(opened,service,permissions):
     values={**data,**parameters}
     c=st.columns(4)
     for col,key,label in zip(c,['margin','taxes','commission','efficiency'],['Margem bruta','Impostos de venda','Comissão / taxa','Eficiência']):
-        col.metric(label,str((Decimal(str(values.get(key,'1' if key=='efficiency' else '0')))*100).normalize())+'%')
+        value='Pendente' if key=='taxes' and not calculation else str((Decimal(str(values.get(key,'1' if key=='efficiency' else '0')))*100).normalize())+'%'
+        col.metric(label,value)
     if calculation:_breakdown(calculation)
     if data.get('proposed_prices') and row.get('status')=='DRAFT':
         st.info('Esta revisão propõe alterar custos compartilhados. A publicação atualizará também as outras folhas que usam esses custos.')
@@ -175,6 +176,28 @@ def _edit(opened,service,actor,permissions):
                 drawing_code=drawing,drawing_revision=drawing_revision,source=source)
     opened['working_fields']=deepcopy(fields)
     signature=json.dumps(dict(fields=fields,rows=edited),sort_keys=True)
+    if service.repo.version()!=opened['version']:
+        fresh=service.repo.catalog()
+        for kind in KINDS:
+            old_by_id={str(b['id']):b for b in catalog[kind]}
+            new_by_id={str(b['id']):b for b in fresh['bases'][kind]}
+            for entry in edited[kind]:
+                identity=str(entry.get('_base_original',''))
+                old=old_by_id.get(identity);new=new_by_id.get(identity)
+                if old and new:
+                    entry['Base']=base_label(new)
+                    # Preserve manual price proposals, including their original version.
+                    try:unchanged=Decimal(str(entry.get('Preço (R$)')).replace(',','.'))==Decimal(str(old['price']))
+                    except Exception:unchanged=False
+                    if unchanged:
+                        entry['Preço (R$)']=str(new['price'])
+                        entry['_proposal_version']=new['version']
+            opened['working_rows'][kind]=normalize_rows(edited[kind],fresh['bases'][kind])
+            opened['grid_epochs'][kind]+=1
+        opened['catalog']=fresh;opened['version']=fresh['version']
+        opened['costs_refreshed']=True
+        opened.pop('calculation',None);opened.pop('calculation_signature',None)
+        st.rerun()
     c=st.columns(2)
     simulate=c[0].button('Simular composição',key=key('simulate'))
     save=c[1].button('Salvar rascunho',type='primary',disabled='edit' not in permissions,key=key('save'))
@@ -195,6 +218,7 @@ def _edit(opened,service,actor,permissions):
         opened['calculation_signature']=signature
     if refresh_needed:st.rerun()
     with price_area:
+        if opened.pop('costs_refreshed',False):st.info('Custos ou regras fiscais foram atualizados. Confira a nova prévia antes de salvar; seus campos editados foram mantidos.')
         if opened.get('calculation'):
             _summary(opened['calculation'])
             st.caption('Prévia da edição. Salve o rascunho e publique a revisão para usar este preço na análise comercial.')
@@ -242,6 +266,8 @@ def render_sheets(actor,service=None,permissions=None):
     if opened.get('actor',actor)!=actor:
         st.session_state.pop('pricing_sheet_open',None);return
     opened['actor']=actor
+    if opened['mode']=='view' and opened['row'].get('revision_id') in by_id:
+        opened['row']=by_id[opened['row']['revision_id']]
     if not opened['code']:
         items=pricing_items.list_items();labels={r[0]:f'{r[0]} — {r[1]}' for r in items}
         code=st.selectbox('Item KSB da folha',list(labels),index=None,format_func=lambda key:labels[key],placeholder='Selecione o item para a nova folha')
