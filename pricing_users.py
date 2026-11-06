@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from pricing_catalog import CatalogService
 from pricing_widgets import selected_rows
-from ui_components import page_header
+from ui_components import page_header,dataframe_to_excel_bytes
 
 PERMISSIONS={'view':'Consultar custos e composição','edit':'Criar revisões em rascunho',
              'publish':'Publicar e arquivar folhas','costs':'Alterar custos base e perfis'}
@@ -23,6 +23,8 @@ def render_users(actor):
     table=pd.DataFrame(rows,columns=['ID','Nome','Usuário','Perfil','Status'])
     if query:table=table[table.astype(str).apply(lambda col:col.str.contains(query,case=False,regex=False)).any(axis=1)]
     selection=selected_rows(table,'pricing_users_table')
+    st.download_button('Baixar usuários em Excel',dataframe_to_excel_bytes(table,'Usuários'),
+                       file_name='usuarios.xlsx',mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     chosen=by_id.get(int(selection.iloc[0]['ID'])) if len(selection)==1 else None
     cols=st.columns(5)
     if cols[0].button('➕ Novo Usuário'):
