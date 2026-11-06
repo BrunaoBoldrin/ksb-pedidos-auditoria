@@ -50,9 +50,12 @@ class PricingRepository:
             version=c.fetchone()['version']
             bases={}
             for kind,table in TABLES.items():
-                c.execute(f'SELECT * FROM {table} ORDER BY code')
+                c.execute(f'''SELECT b.*,(SELECT count(DISTINCT r.sheet_id)
+                  FROM pricing_dependencies d JOIN pricing_revisions r ON r.id=d.revision_id
+                  WHERE d.{kind}_id=b.id) AS usage_count FROM {table} b ORDER BY b.code''')
                 bases[kind]=plain(c.fetchall())
-            c.execute('SELECT * FROM pricing_profiles ORDER BY code')
+            c.execute('''SELECT p.*,(SELECT count(DISTINCT sheet_id) FROM pricing_revisions
+              WHERE profile_id=p.id) AS usage_count FROM pricing_profiles p ORDER BY p.code''')
             return dict(version=version,bases=bases,profiles=plain(c.fetchall()))
 
     def sheets(self):
