@@ -31,12 +31,12 @@ class CatalogTests(unittest.TestCase):
         profile['data']['taxes']='0.2'
         version=self.repo.version();key=self.key()
         preview=self.catalog.preview_catalog([('component',base)],[profile],[],'admin',version)
-        self.assertEqual(preview['items'][0]['after'],'183.33')
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
+        self.assertEqual(preview['items'][0]['after'],'150.43')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'136.75')
         result=self.catalog.publish_catalog([('component',base)],[profile],[],'admin',version,'Atualização',key)
         self.assertEqual(result['count'],1)
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'183.33')
-        self.assertEqual(self.repo.snapshot(before['snapshot_id'])['net_price'],'200.00')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'150.43')
+        self.assertEqual(self.repo.snapshot(before['snapshot_id'])['net_price'],'136.75')
         self.assertEqual(self.catalog.publish_catalog([('component',base)],[profile],[],'admin',version,'Atualização',key),result)
         with self.repo.transaction() as c:
             c.execute('SELECT count(*) AS n FROM pricing_prices WHERE revision_id=%s',(before['revision_id'],))
@@ -49,7 +49,7 @@ class CatalogTests(unittest.TestCase):
         version=self.repo.version()
         with self.assertRaises(PricingError):
             self.catalog.publish_catalog([('component',base),('material',bad)],[],[],'admin',version,'Teste',self.key())
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'136.75')
         self.assertEqual(self.repo.version(),version)
 
     def test_delete_used_cost_is_rejected_and_unused_cost_can_be_blocked_and_deleted(self):
@@ -68,7 +68,8 @@ class CatalogTests(unittest.TestCase):
         profile=dict(code='Geral',data=dict(efficiency='1',taxes='0.3',rounding='CENT'),reviewed_on='2026-11-06',active=True)
         self.catalog.publish_catalog([], [profile], [], 'admin',self.repo.version(),'Novo',self.key())
         profile=self.repo.list_profiles()[0]
-        self.activate(profile_id=profile['id'])
+        old=self.activate()
+        with self.repo.transaction() as c:c.execute('UPDATE pricing_revisions SET profile_id=%s WHERE id=%s',(profile['id'],old['id']))
         with self.assertRaises(PricingError):
             self.catalog.publish_catalog([],[],[('profile',profile['id'])],'admin',self.repo.version(),'Excluir',self.key())
         profile['active']=False
@@ -103,7 +104,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(snap['bases']['component'][0]['code'],'COMP')
         rows=self.repo.sheets()
         self.assertEqual(rows[0]['revision_id'],revision['id'])
-        self.assertEqual(rows[0]['net_price'],'200.00')
+        self.assertEqual(rows[0]['net_price'],'136.75')
 
     def test_catalog_usage_counts_include_archived_and_draft_links(self):
         self.service.save_profile('GERAL',dict(efficiency='1',taxes='0.3',rounding='CENT'),'admin',self.repo.version(),'2026-11-06',self.key())
@@ -113,16 +114,17 @@ class CatalogTests(unittest.TestCase):
         self.service.save_draft('B',self.data(profile_id=profile_id),'admin',self.repo.version())
         snapshot=self.repo.catalog()
         self.assertEqual(snapshot['bases']['component'][0]['usage_count'],2)
-        self.assertEqual(snapshot['profiles'][0]['usage_count'],2)
+        self.assertEqual(snapshot['profiles'][0]['usage_count'],0)
         with self.assertRaises(PricingError):
             self.catalog.publish_catalog([],[],[('component',self.base['id'])],'admin',self.repo.version(),'Excluir',self.key())
 
-    def test_blocked_profile_cannot_be_used_to_publish_new_sheet(self):
+    def test_old_profile_is_discarded_when_saving_a_new_ncm_sheet(self):
         profile=dict(code='Bloqueado',data=dict(efficiency='1',taxes='0.3',rounding='CENT'),reviewed_on='2026-11-06',active=False)
         self.catalog.publish_catalog([],[profile],[],'admin',self.repo.version(),'Novo bloqueado',self.key())
         draft=self.service.save_draft('A',self.data(profile_id=self.repo.list_profiles()[0]['id']),'admin',self.repo.version())
-        with self.assertRaises(PricingError):
-            self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
+        self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'136.75')
+        self.assertIsNone(self.repo.revisions('A')[0]['profile_id'])
 
     def test_user_lifecycle_preserves_admin_and_never_logs_passwords(self):
         uid=self.catalog.save_user(None,dict(name='Novo',username='novo',profile='PROCESSISTA',active=True,password='fake-initial-password'),['edit'],'admin',self.repo.version())
@@ -145,13 +147,13 @@ class CatalogTests(unittest.TestCase):
     def test_sheet_price_edit_is_draft_only_until_publication_updates_every_dependent(self):
         self.activate('A');self.activate('B')
         draft=self.service.save_draft('A',self.data(proposed_prices=self.proposal()),'admin',self.repo.version())
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
-        self.assertEqual(self.service.preview_sheet(draft['id'],'admin')['calculation']['net_price'],'260.00')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'136.75')
+        self.assertEqual(self.service.preview_sheet(draft['id'],'admin')['calculation']['net_price'],'177.77')
         self.assertEqual(self.repo.list_bases('component')[0]['price'],'100.000000000000')
         result=self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
         self.assertEqual(result['count'],2)
         refs=self.repo.references(['A','B'])['items']
-        self.assertEqual([refs[c]['price'] for c in ('A','B')],['260.00','260.00'])
+        self.assertEqual([refs[c]['price'] for c in ('A','B')],['177.77','177.77'])
 
     def test_stale_sheet_price_proposal_never_overwrites_newer_universal_cost(self):
         self.activate('A')
@@ -159,7 +161,7 @@ class CatalogTests(unittest.TestCase):
         base=self.repo.list_bases('component')[0];base['price']='110'
         self.catalog.publish_catalog([('component',base)],[],[],'admin',self.repo.version(),'Atualização',self.key())
         with self.assertRaises(StalePreview):self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'220.00')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'150.43')
 
     def test_active_sheet_recalculation_does_not_replay_old_proposed_cost(self):
         draft=self.service.save_draft('A',self.data(proposed_prices=self.proposal()),'admin',self.repo.version())
@@ -167,13 +169,13 @@ class CatalogTests(unittest.TestCase):
         base=self.repo.list_bases('component')[0];base['price']='140'
         self.catalog.publish_catalog([('component',base)],[],[],'admin',self.repo.version(),'Atualização',self.key())
         self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'280.00')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'191.45')
 
     def test_failed_sheet_publication_rolls_back_proposed_global_price(self):
         self.activate()
         draft=self.service.save_draft('A',self.data(proposed_prices=self.proposal(),efficiency='0'),'admin',self.repo.version())
         with self.assertRaises(PricingError):self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
-        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'136.75')
         self.assertEqual(self.repo.list_bases('component')[0]['price'],'100.000000000000')
 
     def test_sheet_price_edit_requires_cost_permission_at_save_and_publish(self):

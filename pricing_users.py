@@ -8,7 +8,7 @@ from pricing_widgets import selected_rows
 from ui_components import page_header,dataframe_to_excel_bytes
 
 PERMISSIONS={'view':'Consultar custos e composição','edit':'Criar revisões em rascunho',
-             'publish':'Publicar e arquivar folhas','costs':'Alterar custos base e perfis'}
+             'publish':'Publicar e arquivar folhas','costs':'Alterar custos compartilhados'}
 
 
 def render_users(actor):

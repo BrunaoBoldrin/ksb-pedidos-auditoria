@@ -26,7 +26,7 @@ def _display(value):
 
 
 def _initial(snapshot):
-    workspace=new_workspace(snapshot)
+    workspace=new_workspace(dict(snapshot,profiles=[]))
     for row in workspace['costs']:
         for field in ['Preço (R$)','Fator líquido','kg/m²','Comprimento barra (mm)']:row[field]=_display(row[field])
     for row in workspace['profiles']:
@@ -99,56 +99,29 @@ def _cost_card(title,kind,context,editable):
                     _remove_option(row,context,editable)
 
 
-def _profiles_card(context,editable):
-    with st.container(border=True,height='stretch',key='catalog_card_profiles'):
-        st.subheader('Padrões comerciais',divider='gray')
-        st.caption('Eficiência, tributos e arredondamento dos perfis compartilhados.')
-        if not context['workspace']['profiles']:st.caption('Adicione um perfil para definir seus parâmetros.')
-        for row in context['workspace']['profiles']:
-            st.markdown('**'+row['Perfil']+'**')
-            columns=st.columns(2,gap='medium')
-            with columns[0]:_input(row,'Eficiência (%)','Eficiência (%)',context,editable)
-            with columns[1]:_input(row,'Impostos (%)','Tributos de venda (%)',context,editable)
-            _input(row,'Arredondamento','Arredondamento',context,editable,kind='select',options=list(ROUNDINGS.values()))
-            with st.expander('Detalhes · '+row['Perfil']):
-                _input(row,'Perfil','Nome do perfil',context,editable)
-                _input(row,'Revisão','Data de revisão',context,editable,kind='date')
-                _input(row,'Ativo','Perfil ativo',context,editable,kind='checkbox')
-                _remove_option(row,context,editable,profile=True)
-
-
-def _add_fields(context,editable,profiles_only):
+def _add_fields(context,editable):
     workspace=context['workspace'];nonce=workspace['add_nonce']
     with st.expander('Adicionar campos ao formulário',expanded=not workspace['costs'] and not workspace['profiles']):
-        if not profiles_only:
-            st.markdown('**Novo custo**')
-            columns=st.columns(2)
-            name=columns[0].text_input('Nome do novo campo',key=f'{context["prefix"]}_new_name_{nonce}',disabled=not editable)
-            category=columns[1].selectbox('Categoria do campo',list(KINDS.values()),index=1,key=f'{context["prefix"]}_new_kind_{nonce}',disabled=not editable)
-            columns=st.columns(3)
-            price=columns[0].text_input('Preço inicial (R$)',key=f'{context["prefix"]}_new_price_{nonce}',disabled=not editable)
-            unit=columns[1].selectbox('Unidade do campo',UNITS,key=f'{context["prefix"]}_new_unit_{nonce}',disabled=not editable)
-            code=columns[2].text_input('Código opcional',key=f'{context["prefix"]}_new_code_{nonce}',disabled=not editable)
-            note=st.text_input('Observação do novo campo',key=f'{context["prefix"]}_new_note_{nonce}',disabled=not editable)
-            if st.button('Adicionar campo',disabled=not editable):
-                try:
-                    code=code.strip() or re.sub(r'[^A-Z0-9]+','-',unicodedata.normalize('NFKD',name).encode('ascii','ignore').decode().upper()).strip('-')[:64]
-                    if any(r['Categoria']==category and r['Código'].casefold()==code.casefold() for r in workspace['costs']):raise PricingError('Já existe um campo com esse código neste grupo.')
-                    kind=next(k for k,label in KINDS.items() if label==category)
-                    base=CatalogService._normalize_base(dict(code=code,description=name,price=price,unit=unit,factor='1',reviewed_on=_today().isoformat(),note=note))
-                    base['id']='new_'+uuid4().hex
-                    row=cost_row(kind,base);row['Preço (R$)']=_display(base['price'])
-                    workspace['costs'].append(row);workspace['add_nonce']+=1;workspace.pop('impact',None)
-                    st.rerun()
-                except ValueError as exc:st.error(str(exc))
-        st.markdown('**Novo perfil**')
-        name=st.text_input('Nome do novo perfil',key=f'{context["prefix"]}_new_profile_{nonce}',disabled=not editable)
-        if st.button('Adicionar perfil',disabled=not editable):
-            if not name.strip():st.error('Informe o nome do perfil.')
-            elif any(p['Perfil'].casefold()==name.strip().casefold() for p in workspace['profiles']):st.error('Já existe um perfil com esse nome.')
-            else:
-                row=profile_row(dict(id='new_'+uuid4().hex,code=name.strip(),data=dict(efficiency='1',taxes='0',rounding='CENT'),reviewed_on=_today().isoformat(),active=True))
-                workspace['profiles'].append(row);workspace['add_nonce']+=1;workspace.pop('impact',None);st.rerun()
+        st.markdown('**Novo custo**')
+        columns=st.columns(2)
+        name=columns[0].text_input('Nome do novo campo',key=f'{context["prefix"]}_new_name_{nonce}',disabled=not editable)
+        category=columns[1].selectbox('Categoria do campo',list(KINDS.values()),index=1,key=f'{context["prefix"]}_new_kind_{nonce}',disabled=not editable)
+        columns=st.columns(3)
+        price=columns[0].text_input('Preço inicial (R$)',key=f'{context["prefix"]}_new_price_{nonce}',disabled=not editable)
+        unit=columns[1].selectbox('Unidade do campo',UNITS,key=f'{context["prefix"]}_new_unit_{nonce}',disabled=not editable)
+        code=columns[2].text_input('Código opcional',key=f'{context["prefix"]}_new_code_{nonce}',disabled=not editable)
+        note=st.text_input('Observação do novo campo',key=f'{context["prefix"]}_new_note_{nonce}',disabled=not editable)
+        if st.button('Adicionar campo',disabled=not editable):
+            try:
+                code=code.strip() or re.sub(r'[^A-Z0-9]+','-',unicodedata.normalize('NFKD',name).encode('ascii','ignore').decode().upper()).strip('-')[:64]
+                if any(r['Categoria']==category and r['Código'].casefold()==code.casefold() for r in workspace['costs']):raise PricingError('Já existe um campo com esse código neste grupo.')
+                kind=next(k for k,label in KINDS.items() if label==category)
+                base=CatalogService._normalize_base(dict(code=code,description=name,price=price,unit=unit,factor='1',reviewed_on=_today().isoformat(),note=note))
+                base['id']='new_'+uuid4().hex
+                row=cost_row(kind,base);row['Preço (R$)']=_display(base['price'])
+                workspace['costs'].append(row);workspace['add_nonce']+=1;workspace.pop('impact',None)
+                st.rerun()
+            except ValueError as exc:st.error(str(exc))
         st.caption('Adicionar cria o campo nesta edição. O banco só é alterado ao clicar em Salvar alterações.')
 
 
@@ -167,17 +140,17 @@ def _pending(context):
     return workspace_changes(buffer,costs,profiles,_today()),costs,profiles
 
 
-def render_catalog(actor,service=None,profiles_only=False):
+def render_catalog(actor,service=None,permissions=None):
     service=service or CatalogService()
-    try:permissions=service.permissions(actor)
+    try:permissions=service.permissions(actor) if permissions is None else permissions
     except PermissionError as exc:st.error(str(exc));return
     if 'view' not in permissions:st.error('Você não tem autorização para consultar custos.');return
-    editable='costs' in permissions;area='profiles' if profiles_only else 'all'
+    editable='costs' in permissions;area='all'
     state_key=f'form_catalog_workspace_{actor}_{area}'
     if state_key not in st.session_state:st.session_state[state_key]=_initial(service.repo.catalog())
     workspace=st.session_state[state_key]
     context=dict(state_key=state_key,workspace=workspace,prefix=f'fc_{actor}_{area}_{workspace["key"]}',collection='costs')
-    st.subheader('Perfis de cálculo' if profiles_only else 'Central de custos')
+    st.subheader('Central de custos')
     st.caption('Altere os campos e salve o formulário uma única vez. As folhas dependentes serão atualizadas automaticamente.')
     st.markdown('''<style>
     .st-key-catalog_form_cards [data-testid="stVerticalBlockBorderWrapper"] {background:#fff;border-radius:18px;border-color:#dce6f4;}
@@ -185,17 +158,13 @@ def render_catalog(actor,service=None,profiles_only=False):
     .st-key-catalog_form_cards [data-baseweb="input"],.st-key-catalog_form_cards [data-baseweb="select"]>div {background:#fff;border-color:#d4dfef;border-radius:8px;}
     </style>''',unsafe_allow_html=True)
     with st.container(key='catalog_form_cards'):
-        profile_context=dict(context,collection='profiles')
-        if profiles_only:_profiles_card(profile_context,editable)
-        else:
-            left,right=st.columns(2,gap='medium')
-            with left:_cost_card('Custos de produção','process',context,editable)
-            with right:_profiles_card(profile_context,editable)
-            left,right=st.columns(2,gap='medium')
-            with left:_cost_card('Matérias-primas','material',context,editable)
-            with right:_cost_card('Componentes','component',context,editable)
-            _cost_card('Serviços externos','service',context,editable)
-    _add_fields(context,editable,profiles_only)
+        left,right=st.columns(2,gap='medium')
+        with left:_cost_card('Custos de produção','process',context,editable)
+        with right:_cost_card('Serviços externos','service',context,editable)
+        left,right=st.columns(2,gap='medium')
+        with left:_cost_card('Matérias-primas','material',context,editable)
+        with right:_cost_card('Componentes','component',context,editable)
+    _add_fields(context,editable)
     st.divider()
     reason=st.text_input('Observações do salvamento',value='Atualização pelo formulário de custos',key=context['prefix']+'_reason',disabled=not editable)
     columns=st.columns(3)

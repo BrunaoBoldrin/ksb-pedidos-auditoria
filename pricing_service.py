@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from pricing_calculator import calculate_sheet, number, review_date, PricingError
 from pricing_repository import PricingRepository, TABLES, json_value, plain
+from pricing_fiscal import parameters_for_item
 
 
 class StalePreview(PricingError):
@@ -32,8 +33,8 @@ class PricingService:
             raise PermissionError('Você não tem autorização para esta ação de precificação.')
 
     @staticmethod
-    def _lock(c,expected):
-        c.execute('SELECT version FROM pricing_control WHERE id=1 FOR UPDATE')
+    def _lock(c,expected,read_only=False):
+        c.execute('SELECT version FROM pricing_control WHERE id=1 FOR '+('SHARE' if read_only else 'UPDATE'))
         version=c.fetchone()['version']
         if expected!=version:raise StalePreview('Os dados mudaram. Atualize a tela e refaça a prévia.')
         return version
@@ -116,39 +117,41 @@ class PricingService:
 
     def _calculate(self,c,revision,with_proposed=False):
         data=dict(revision['data'])
-        if revision.get('profile_id'):
-            c.execute('SELECT * FROM pricing_profiles WHERE id=%s',(revision['profile_id'],));profile=c.fetchone()
-            if not profile:raise PricingError('Perfil de custos não encontrado.')
-            if not profile.get('active',True):raise PricingError('Perfil de cálculo bloqueado. Selecione um perfil ativo.')
-            data.update(profile['data'])
-            data['reviewed_on']=min(review_date(data['reviewed_on']),str(profile['reviewed_on']))
-        bases={}
+        bases={};ids={kind:set() for kind in TABLES}
         for line in data.get('lines',[]):
             kind=line.get('kind')
             if kind not in TABLES:raise PricingError('Categoria de linha inválida.')
-            key=(kind,int(line['base_id']))
-            if key not in bases:
-                c.execute(f'SELECT * FROM {TABLES[kind]} WHERE id=%s',(key[1],));base=c.fetchone()
-                if not base:raise PricingError('Custo base não encontrado.')
-                bases[key]=dict(base)
+            ids[kind].add(int(line['base_id']))
+        queries=[];args=[]
+        for kind,values in ids.items():
+            if values:
+                queries.append(f"SELECT '{kind}' AS kind,to_jsonb(b)::text AS base FROM {TABLES[kind]} b WHERE id=ANY(%s)")
+                args.append(sorted(values))
+        if queries:
+            c.execute(' UNION ALL '.join(queries),tuple(args))
+            for row in c.fetchall():
+                base=json.loads(row['base'],parse_float=Decimal)
+                bases[(row['kind'],base['id'])]=base
         if with_proposed:
             for kind,base in self._proposed_changes(c,data):bases[(kind,base['id'])]=base
-        c.execute('SELECT ncm,unidade_medida FROM materiais WHERE codigo_material=%s',(revision['material_code'],))
-        material=c.fetchone()
-        if not material:raise PricingError('Item KSB não encontrado.')
-        context=dict(basis=data.get('basis'),ncm=material['ncm'],unit=material['unidade_medida'],icms=None,ipi=None)
-        divisor=None
-        if data.get('basis')=='GROSS':
-            c.execute('''SELECT m.ncm,f.aliquota_icms,f.aliquota_ipi FROM materiais m
-              JOIN LATERAL(SELECT * FROM regras_fiscais WHERE regexp_replace(ncm,'[^0-9]','','g')=
-              regexp_replace(m.ncm,'[^0-9]','','g') AND ativo=1 ORDER BY id DESC LIMIT 1)f ON true
-              WHERE m.codigo_material=%s''',(revision['material_code'],))
-            rule=c.fetchone()
-            if not rule:raise PricingError('Cadastre uma regra fiscal para o NCM antes de publicar esta base de preço.')
-            from parser import calcular_divisor_base
-            divisor=Decimal(str(calcular_divisor_base(rule['aliquota_icms'])))
-            context.update(ncm=str(rule['ncm']),icms=str(rule['aliquota_icms']),ipi=str(rule['aliquota_ipi']))
-        return calculate_sheet(data,bases,divisor),context
+        context=self._fiscal(c,revision['material_code'])
+        data.update(basis='GROSS',confirmed=True,taxes=context['taxes'])
+        result=calculate_sheet(data,bases,context['fiscal_divisor'])
+        result.parameters.update(tax_source='NCM',ipi=Decimal(context['ipi'])/100)
+        return result,context
+
+    @staticmethod
+    def _fiscal(c,code):
+        c.execute('''SELECT m.ncm,m.unidade_medida,f.id AS rule_id,f.aliquota_icms,f.aliquota_ipi
+          FROM materiais m LEFT JOIN LATERAL(SELECT id,aliquota_icms,aliquota_ipi FROM regras_fiscais
+          WHERE regexp_replace(ncm,'[^0-9]','','g')=regexp_replace(m.ncm,'[^0-9]','','g')
+          AND ativo=1 ORDER BY id DESC LIMIT 1)f ON true WHERE m.codigo_material=%s''',(code,))
+        return parameters_for_item(c.fetchone())
+
+    def fiscal_for_item(self,code,actor):
+        with self.repo.transaction() as c:
+            self._require(c,actor,'view')
+            return self._fiscal(c,code)
 
     def _revision(self,c,revision_id):
         c.execute('SELECT r.*,s.material_code FROM pricing_revisions r JOIN pricing_sheets s ON s.id=r.sheet_id WHERE r.id=%s',(revision_id,))
@@ -248,6 +251,7 @@ class PricingService:
 
     def save_draft(self,code,data,actor,expected_version):
         if not isinstance(data.get('lines',[]),list) or len(data.get('lines',[]))>500:raise PricingError('Composição inválida ou acima de 500 linhas.')
+        data=dict(data,profile_id=None,basis='GROSS',confirmed=True,tax_source='NCM')
         with self.repo.transaction() as c:
             self._lock(c,expected_version);self._require(c,actor,'edit')
             if data.get('proposed_prices'):
@@ -270,14 +274,14 @@ class PricingService:
             c.execute('SELECT version FROM pricing_control WHERE id=1 FOR SHARE')
             self._require(c,actor,'view');revision=self._revision(c,revision_id)
             result,context=self._calculate(c,revision,with_proposed=revision['status']=='DRAFT')
-            return dict(calculation=result.snapshot(),fiscal_context=context)
+            return dict(calculation=dict(result.snapshot(),fiscal_context=context),fiscal_context=context)
 
     def preview_draft(self,code,data,actor,expected_version):
         with self.repo.transaction() as c:
-            self._lock(c,expected_version);self._require(c,actor,'view')
+            self._lock(c,expected_version,read_only=True);self._require(c,actor,'view')
             revision=dict(data=data,profile_id=data.get('profile_id'),material_code=code)
             result,context=self._calculate(c,revision,with_proposed=True)
-            return dict(calculation=result.snapshot(),fiscal_context=context)
+            return dict(calculation=dict(result.snapshot(),fiscal_context=context),fiscal_context=context)
 
     def preview_profile(self,code,data,reviewed_on,actor,expected_version):
         code,data,reviewed_on=self._normalize_profile(code,data,reviewed_on)
@@ -313,7 +317,6 @@ class PricingService:
                 for kind,data in changes:
                     result,old=self._write_base(c,kind,data)
                     self._event(c,actor,'ALTERAR CUSTO PELA FOLHA',f'{kind}:{result["id"]}',dict(before=old,after=result,sheet_revision_id=rev['id']))
-            self._calculate(c,rev)
             c.execute("UPDATE pricing_revisions SET status='ARCHIVED' WHERE sheet_id=%s AND status='ACTIVE'",(rev['sheet_id'],))
             c.execute("UPDATE pricing_revisions SET status='ACTIVE' WHERE id=%s",(revision_id,))
             affected={r['id']:r for r in self._dependents(c,changes)}

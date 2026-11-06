@@ -65,11 +65,17 @@ def _get_db_config():
         "user": os.environ["DB_USER"],
         "password": os.environ["DB_PASSWORD"],
         "sslmode": os.environ.get("DB_SSLMODE", "require"),
+        "connect_timeout": 10,
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 3,
     }
 
 
 def conectar():
-    return psycopg2.connect(**_get_db_config())
+    from database_pool import connect
+    return connect(_get_db_config())
 
 
 @contextmanager

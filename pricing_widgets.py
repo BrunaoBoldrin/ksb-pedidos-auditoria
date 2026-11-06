@@ -2,6 +2,16 @@
 import streamlit as st
 
 
+def button_navigation(options,key):
+    if st.session_state.get(key) not in options:st.session_state[key]=options[0]
+    def select(value):st.session_state[key]=value
+    for column,option in zip(st.columns(len(options)),options):
+        column.button(option,key=key+'_'+option,width='stretch',
+                      type='primary' if st.session_state[key]==option else 'secondary',
+                      on_click=select,args=(option,))
+    return st.session_state[key]
+
+
 def selected_rows(frame,key):
     table=frame.copy().reset_index(drop=True)
     identity=tuple(table.iloc[:,0].astype(str)) if len(table.columns) else ()

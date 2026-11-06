@@ -11,6 +11,7 @@ from datetime import date, datetime
 import unicodedata
 
 import pandas as pd
+import streamlit as st
 
 
 EXCEL_BRL_NUMBER_FORMAT = '[$R$-pt-BR] #,##0.00'
@@ -74,6 +75,7 @@ def write_dataframe_to_excel(writer, dataframe, sheet_name):
             worksheet.cell(row=row_index, column=column_index).number_format = EXCEL_BRL_NUMBER_FORMAT
 
 
+@st.cache_data(show_spinner=False,max_entries=16,ttl=300)
 def dataframe_to_excel_bytes(dataframe, sheet_name="Dados"):
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:

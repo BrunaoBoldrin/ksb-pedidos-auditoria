@@ -64,9 +64,11 @@ class PriceCalculation:
             if isinstance(value, dict): return {str(k): serial(v) for k, v in value.items()}
             if isinstance(value, (list, tuple)): return [serial(v) for v in value]
             return value
+        ipi=(self.gross_price*self.parameters.get('ipi',Decimal('0'))).quantize(Decimal('0.01'),rounding=ROUND_HALF_UP)
         return serial(dict(cost=self.cost, gross_price=self.gross_price, net_price=self.net_price,
+                           ipi_amount=ipi,total_with_ipi=self.gross_price+ipi,
                            reviewed_on=self.reviewed_on, breakdown=self.breakdown,
-                           lines=self.lines, parameters=self.parameters, formula_version=1, pieces=1))
+                           lines=self.lines, parameters=self.parameters, formula_version=2 if self.parameters.get('tax_source')=='NCM' else 1, pieces=1))
 
 
 def calculate_sheet(sheet: Mapping, bases: Mapping, fiscal_divisor=None) -> PriceCalculation:
