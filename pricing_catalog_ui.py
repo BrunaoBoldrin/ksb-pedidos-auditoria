@@ -88,6 +88,7 @@ def render_catalog(actor,service=None,profiles_only=False):
     state_key=f'catalog_workspace_{actor}_{area}'
     if state_key not in st.session_state:st.session_state[state_key]=new_workspace(service.repo.catalog())
     workspace=st.session_state[state_key]
+    cost_actions=None
     st.subheader('Perfis de cálculo' if profiles_only else 'Central de custos')
     st.caption('Altere os valores desejados na tabela e salve uma única vez. As folhas ativas relacionadas serão recalculadas automaticamente.')
     if not profiles_only:
@@ -105,7 +106,7 @@ def render_catalog(actor,service=None,profiles_only=False):
                          'Selecionar':st.column_config.CheckboxColumn(default=False)})
         costs=edited.fillna('').to_dict('records')
         workspace['edited_costs']=deepcopy(costs)
-        _actions(workspace,costs,workspace.get('edited_profiles',workspace['profiles']),'cost',editable)
+        cost_actions=st.container()
     else:costs=workspace['costs']
     st.markdown('**Parâmetros universais dos perfis**')
     profile_key=f'catalog_profiles_{actor}_{area}_{workspace["epoch"]}'
@@ -117,6 +118,8 @@ def render_catalog(actor,service=None,profiles_only=False):
                                          'Selecionar':st.column_config.CheckboxColumn(default=False)})
     profiles=edited.fillna('').to_dict('records')
     workspace['edited_profiles']=deepcopy(profiles)
+    if cost_actions is not None:
+        with cost_actions:_actions(workspace,costs,profiles,'cost',editable)
     _actions(workspace,costs,profiles,'profile',editable)
     _details(workspace,costs,profiles)
     st.divider()

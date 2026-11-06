@@ -46,19 +46,44 @@ class PricingScreensTests(unittest.TestCase):
         with patch.object(PricingRepository,'catalog',return_value=snapshot), \
              patch.object(CatalogService,'permissions',return_value={'view','costs'}), \
              patch.object(CatalogService,'publish_catalog',side_effect=publish):
-            app=AppTest.from_string('from pricing_catalog_ui import render_catalog\nrender_catalog("admin")',default_timeout=15).run()
+            source='import streamlit as st\nfrom pricing_catalog_ui import render_catalog\narea=st.radio("Tela",["Central","Outra"],key="central_test_route")\nif area=="Central":render_catalog("admin")'
+            app=AppTest.from_string(source,default_timeout=15).run()
             self.assertEqual(len(app.exception),0)
             app.session_state['catalog_costs_admin_all_0']={'edited_rows':{0:{'Preço (R$)':'13'}},'added_rows':[],'deleted_rows':[]}
             app.run()
             app.session_state['catalog_costs_admin_all_0']={'edited_rows':{0:{'Preço (R$)':'13'},1:{'Preço (R$)':'3,50'}},'added_rows':[],'deleted_rows':[]}
             app.session_state['catalog_profiles_admin_all_0']={'edited_rows':{0:{'Impostos (%)':'20'}},'added_rows':[],'deleted_rows':[]}
-            app.run()
+            app.button(key='new_cost').click().run()
+            self.assertEqual(app.dataframe[1].value.iloc[0]['Impostos (%)'],'20')
+            app.radio(key='central_test_route').set_value('Outra').run()
+            app.radio(key='central_test_route').set_value('Central').run()
+            self.assertEqual(app.dataframe[0].value.iloc[0]['Preço (R$)'],'13')
             next(b for b in app.button if b.label=='Salvar alterações').click().run()
             self.assertEqual(len(app.exception),0)
             self.assertEqual([r['price'] for _,r in saved[0][0]],['13','3.50'])
             self.assertEqual(saved[0][1][0]['data']['taxes'],'0.2')
             self.assertEqual(saved[0][2],8)
             self.assertTrue(any('2 itens' in s.value for s in app.success))
+
+    def test_saved_draft_opens_immediately_for_review_without_manual_refresh(self):
+        from pricing_repository import PricingRepository
+        from pricing_catalog import CatalogService
+        records=[]
+        def save(code,data,actor,version):
+            records.append(dict(revision_id=42,number=1,status='DRAFT',material_code=code,descricao='Peça teste',unidade_medida='UN',data=data,snapshot_id=None,net_price=None,gross_price=None,reviewed_on=None))
+            return dict(id=42,number=1)
+        with patch.object(PricingRepository,'sheets',side_effect=lambda:records), \
+             patch.object(PricingRepository,'catalog',return_value=dict(version=8,bases=dict(material=[],component=[],process=[],service=[]),profiles=[])), \
+             patch.object(CatalogService,'permissions',return_value={'view','edit','publish','costs'}), \
+             patch.object(CatalogService,'save_draft',side_effect=save), \
+             patch.object(CatalogService,'preview_sheet',side_effect=ValueError('Rascunho incompleto')):
+            app=AppTest.from_string('from pricing_sheets_ui import render_sheets\nrender_sheets("admin")',default_timeout=15)
+            app.session_state['pricing_sheet_request']='001'
+            app.run()
+            next(b for b in app.button if b.label=='Salvar rascunho').click().run()
+            self.assertEqual(len(app.exception),0)
+            self.assertEqual(app.session_state['pricing_sheet_open']['row']['revision_id'],42)
+            self.assertTrue(any(b.label=='Publicar revisão' for b in app.button))
 
     def test_technical_checkbox_selection_opens_selected_item_without_second_selector(self):
         with patch.object(pricing_items,'list_items',return_value=[('00123','Peça teste','','','123','UN','J1','V1')]):
