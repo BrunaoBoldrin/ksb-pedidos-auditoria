@@ -18,6 +18,7 @@ class CatalogTests(unittest.TestCase):
     def setUp(self):
         fixtures.RepositoryTests.setUp(self)
         self.catalog=CatalogService(self.repo)
+        with self.repo.transaction() as c:c.execute('ALTER TABLE usuarios ADD COLUMN senha text')
 
     def key(self):return uuid.uuid4().hex
 
@@ -110,3 +111,62 @@ class CatalogTests(unittest.TestCase):
         draft=self.service.save_draft('A',self.data(profile_id=self.repo.list_profiles()[0]['id']),'admin',self.repo.version())
         with self.assertRaises(PricingError):
             self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
+
+    def test_user_lifecycle_preserves_admin_and_never_logs_passwords(self):
+        uid=self.catalog.save_user(None,dict(name='Novo',username='novo',profile='PROCESSISTA',active=True,password='fake-initial-password'),['edit'],'admin',self.repo.version())
+        self.assertEqual(self.service.permissions('novo'),{'view','edit'})
+        self.catalog.user_action(uid,'password','admin',self.repo.version(),'fake-replacement-password')
+        with self.repo.transaction() as c:
+            c.execute('SELECT senha FROM usuarios WHERE id=%s',(uid,))
+            self.assertEqual(c.fetchone()['senha'],'fake-replacement-password')
+        self.assertNotIn('fake-replacement-password',str(self.repo.events()))
+        self.catalog.user_action(uid,'delete','admin',self.repo.version())
+        self.assertFalse(any(u['id']==uid for u in self.catalog.users('admin')))
+        admin=next(u for u in self.catalog.users('admin') if u['usuario']=='admin')
+        with self.assertRaises(PricingError):
+            self.catalog.user_action(admin['id'],'delete','admin',self.repo.version())
+
+    def proposal(self,price='130'):
+        base=self.repo.list_bases('component')[0]
+        return [dict(kind='component',base_id=base['id'],price=price,version=base['version'],reviewed_on='2026-11-06')]
+
+    def test_sheet_price_edit_is_draft_only_until_publication_updates_every_dependent(self):
+        self.activate('A');self.activate('B')
+        draft=self.service.save_draft('A',self.data(proposed_prices=self.proposal()),'admin',self.repo.version())
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
+        self.assertEqual(self.service.preview_sheet(draft['id'],'admin')['calculation']['net_price'],'260.00')
+        self.assertEqual(self.repo.list_bases('component')[0]['price'],'100.000000000000')
+        result=self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
+        self.assertEqual(result['count'],2)
+        refs=self.repo.references(['A','B'])['items']
+        self.assertEqual([refs[c]['price'] for c in ('A','B')],['260.00','260.00'])
+
+    def test_stale_sheet_price_proposal_never_overwrites_newer_universal_cost(self):
+        self.activate('A')
+        draft=self.service.save_draft('A',self.data(proposed_prices=self.proposal()),'admin',self.repo.version())
+        base=self.repo.list_bases('component')[0];base['price']='110'
+        self.catalog.publish_catalog([('component',base)],[],[],'admin',self.repo.version(),'Atualização',self.key())
+        with self.assertRaises(StalePreview):self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'220.00')
+
+    def test_active_sheet_recalculation_does_not_replay_old_proposed_cost(self):
+        draft=self.service.save_draft('A',self.data(proposed_prices=self.proposal()),'admin',self.repo.version())
+        self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
+        base=self.repo.list_bases('component')[0];base['price']='140'
+        self.catalog.publish_catalog([('component',base)],[],[],'admin',self.repo.version(),'Atualização',self.key())
+        self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'280.00')
+
+    def test_failed_sheet_publication_rolls_back_proposed_global_price(self):
+        self.activate()
+        draft=self.service.save_draft('A',self.data(proposed_prices=self.proposal(),efficiency='0'),'admin',self.repo.version())
+        with self.assertRaises(PricingError):self.service.activate(draft['id'],'admin',self.repo.version(),self.key())
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
+        self.assertEqual(self.repo.list_bases('component')[0]['price'],'100.000000000000')
+
+    def test_sheet_price_edit_requires_cost_permission_at_save_and_publish(self):
+        data=self.data(proposed_prices=self.proposal())
+        self.service.set_permissions('venda',['view','edit','publish'],'admin',self.repo.version())
+        with self.assertRaises(PermissionError):self.service.save_draft('A',data,'venda',self.repo.version())
+        draft=self.service.save_draft('A',data,'admin',self.repo.version())
+        with self.assertRaises(PermissionError):self.service.activate(draft['id'],'venda',self.repo.version(),self.key())

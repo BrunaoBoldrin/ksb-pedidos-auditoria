@@ -14,6 +14,7 @@ from pricing_service import PricingService
 from price_rules import is_price_outdated
 from ui_components import dataframe_to_excel_bytes, page_header, formatar_moeda_brl
 from ui_rules import format_timestamp_sao_paulo
+from pricing_widgets import selected_rows
 
 KINDS={'material':'Matérias-primas','component':'Componentes','process':'Processos internos','service':'Serviços externos'}
 UNITS=['UN','KG','G','M','MM','M2','BAR','H']
@@ -40,10 +41,11 @@ def render_items(actor,can_edit=False,can_view=False):
     if query:
         selected=frame[frame.astype(str).apply(lambda col:col.str.contains(query,case=False,regex=False)).any(axis=1)]
     st.caption(f'{len(frame)} itens cadastrados. Mostrando até 300 resultados; use a pesquisa para localizar outros.')
-    st.dataframe(selected.head(300),hide_index=True,width='stretch')
+    chosen=selected_rows(selected.head(300),'technical_table')
     st.download_button('Baixar cadastro técnico em Excel',dataframe_to_excel_bytes(frame,'Itens'),
                        file_name='itens_cadastrados.xlsx',mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    code=st.selectbox('Selecionar item',options=selected['Código Material'].tolist(),index=None,placeholder='Pesquise e selecione um item')
+    code=chosen.iloc[0]['Código Material'] if len(chosen)==1 else None
+    if len(chosen)>1:st.info('Selecione apenas um item para editar ou abrir a folha.')
     cols=st.columns(3)
     if cols[0].button('Novo item',key='technical_new',disabled=not can_edit):
         st.session_state.technical_values={}
@@ -212,127 +214,39 @@ def _sheet_tab(repo,service,actor,permissions,version):
 
 
 def _costs_tab(repo,service,actor,permissions,version):
-    kind=st.selectbox('Tabela de custos',list(KINDS),format_func=lambda x:KINDS[x])
-    entries=repo.list_bases(kind)
-    if entries:st.dataframe(pd.DataFrame(entries).drop(columns=['note'],errors='ignore'),hide_index=True,width='stretch')
-    if 'costs' not in permissions:st.caption('Acesso de consulta aos custos.');return
-    by_id={b['id']:b for b in entries}
-    selected=st.selectbox('Custo para editar',[None]+list(by_id),format_func=lambda x:'Novo custo' if x is None else f'{by_id[x]["code"]} — {by_id[x]["description"]}')
-    old=by_id.get(selected,{})
-    with st.form(f'base_editor_{kind}_{selected}'):
-        cols=st.columns(3)
-        code=cols[0].text_input('Código',value=old.get('code',''))
-        description=cols[1].text_input('Descrição',value=old.get('description',''))
-        unit=cols[2].selectbox('Unidade do custo',UNITS,index=UNITS.index(old.get('unit','UN')))
-        cols=st.columns(3)
-        price=cols[0].text_input('Custo na unidade de compra (R$)',value=str(old.get('price','')))
-        factor=cols[1].text_input('Fator líquido de compra',value=str(old.get('factor','1')),help='Use 1 quando o custo já for líquido. Cadastre outra dedução somente após validar a base.')
-        reviewed=cols[2].date_input('Última revisão do custo',value=date.fromisoformat(old['reviewed_on']) if old else today(),max_value=today())
-        cols=st.columns(3)
-        kg_m2=cols[0].text_input('Massa por área (kg/m²)',value=str(old.get('kg_m2') or ''))
-        length=cols[1].text_input('Comprimento da barra (mm)',value=str(old.get('length_mm') or ''))
-        per_person=cols[2].checkbox('Tarifa por operador (multiplicar pessoas)',value=old.get('per_person',True))
-        active=st.checkbox('Custo ativo',value=old.get('active',True))
-        note=st.text_area('Observações / motivo da alteração',value=old.get('note',''))
-        if st.form_submit_button('Simular impacto e preparar salvamento'):
-            candidate=dict(code=code,description=description,unit=unit,price=price,factor=factor,reviewed_on=reviewed.isoformat(),
-                           kg_m2=kg_m2,length_mm=length,per_person=per_person,active=active,note=note)
-            if old:candidate.update(id=old['id'],version=old['version'])
-            try:
-                preview=service.preview_costs([(kind,candidate)],actor)
-                st.session_state.pricing_cost_preview=dict(preview=preview,changes=[(kind,candidate)])
-            except (ValueError,PermissionError) as exc:_error(exc)
-    pending=st.session_state.get('pricing_cost_preview')
-    if pending:
-        preview=pending['preview'];change=pending['changes'][0][1]
-        st.subheader('Prévia de atualização')
-        st.write(f'{change["code"]}: custo {change["price"]} por {change["unit"]}. {len(preview["items"])} itens afetados.')
-        if preview['items']:st.dataframe(pd.DataFrame(preview['items']),hide_index=True,width='stretch')
-        reason=st.text_input('Motivo do salvamento',value=change.get('note',''))
-        cols=st.columns(2)
-        if cols[0].button('Salvar custos e atualizar preços',disabled=not reason.strip()):
-            try:
-                result=service.publish_costs(pending['changes'],actor,preview['version'],reason,preview['key'])
-                st.session_state.pop('pricing_cost_preview',None)
-                st.success(f'Custos salvos. {result["count"]} itens atualizados.');st.rerun()
-            except (ValueError,PermissionError) as exc:_error(exc)
-        if cols[1].button('Descartar prévia'):st.session_state.pop('pricing_cost_preview',None);st.rerun()
+    from pricing_catalog import CatalogService
+    from pricing_catalog_ui import render_catalog
+    render_catalog(actor,CatalogService(repo))
 
 
 def _profiles_tab(repo,service,actor,permissions,version):
-    profiles=repo.list_profiles()
-    if profiles:st.dataframe(pd.DataFrame([dict(code=p['code'],reviewed_on=p['reviewed_on'],**p['data']) for p in profiles]),hide_index=True,width='stretch')
-    if 'costs' not in permissions:return
-    names={p['code']:p for p in profiles}
-    selected=st.selectbox('Perfil para editar',['Novo']+list(names))
-    if st.session_state.get('pricing_profile_selection') != selected:
-        st.session_state.pop('pricing_profile_preview',None)
-        st.session_state.pricing_profile_selection=selected
-    profile=names.get(selected,{});values=profile.get('data',{})
-    with st.form(f'pricing_profile_editor_{profile.get("id","new")}'):
-        code=st.text_input('Nome do perfil',value=profile.get('code',''),disabled=bool(profile))
-        efficiency=st.number_input('Eficiência do perfil (%)',0.0001,100.,float(Decimal(values.get('efficiency','1'))*100))
-        taxes=st.number_input('Impostos de venda do perfil (%)',0.,99.9999,float(Decimal(values.get('taxes','0'))*100),format='%.4f')
-        rounding=st.selectbox('Arredondamento do perfil',list(ROUNDINGS),index=list(ROUNDINGS).index(values.get('rounding','CENT')),format_func=lambda x:ROUNDINGS[x])
-        reviewed=st.date_input('Revisão do perfil',value=date.fromisoformat(profile['reviewed_on']) if profile else today(),max_value=today())
-        if st.form_submit_button('Simular alteração do perfil'):
-            data=dict(efficiency=str(Decimal(str(efficiency))/100),taxes=str(Decimal(str(taxes))/100),rounding=rounding)
-            try:
-                preview=service.preview_profile(code,data,reviewed.isoformat(),actor,version)
-                st.session_state.pricing_profile_preview=dict(code=code,data=data,date=reviewed.isoformat(),preview=preview)
-            except (ValueError,PermissionError) as exc:_error(exc)
-    pending=st.session_state.get('pricing_profile_preview')
-    if pending:
-        st.write('Prévia do perfil: '+pending['code']);st.json(pending['data'])
-        if pending['preview']['items']:st.dataframe(pd.DataFrame(pending['preview']['items']),hide_index=True,width='stretch')
-        if st.button('Salvar perfil e atualizar suas folhas'):
-            try:
-                service.save_profile(pending['code'],pending['data'],actor,pending['preview']['version'],pending['date'],pending['preview']['key'])
-                st.session_state.pop('pricing_profile_preview',None);st.rerun()
-            except (ValueError,PermissionError) as exc:_error(exc)
+    from pricing_catalog import CatalogService
+    from pricing_catalog_ui import render_catalog
+    render_catalog(actor,CatalogService(repo),profiles_only=True)
 
 
 def render_pricing(actor,review_days=90):
-    page_header('Precificação','Custos compartilhados e folha de processo para uma peça de cada item.')
-    service=PricingService();repo=service.repo
+    from pricing_catalog import CatalogService
+    page_header('Precificação','Folhas por peça e manutenção dos custos compartilhados.')
+    service=CatalogService();repo=service.repo
     try:permissions=service.permissions(actor)
     except PermissionError as exc:_error(exc);return
     if 'view' not in permissions:st.error('Você não tem autorização para consultar custos e composição.');return
-    version=repo.version()
-    tabs=st.tabs(['Folhas de processo','Custos base','Perfis de cálculo','Revisões e pendências','Histórico'])
-    with tabs[0]:_sheet_tab(repo,service,actor,permissions,version)
-    with tabs[1]:_costs_tab(repo,service,actor,permissions,version)
-    with tabs[2]:_profiles_tab(repo,service,actor,permissions,version)
-    with tabs[3]:
+    area=st.radio('Área de precificação',['Folhas de processo','Central de custos','Perfis de cálculo','Revisões e pendências','Histórico'],horizontal=True,label_visibility='collapsed',key='pricing_area')
+    if area=='Folhas de processo':_sheet_tab(repo,service,actor,permissions,repo.version())
+    elif area=='Central de custos':_costs_tab(repo,service,actor,permissions,None)
+    elif area=='Perfis de cálculo':_profiles_tab(repo,service,actor,permissions,None)
+    elif area=='Revisões e pendências':
         items=pricing_items.list_items();refs=repo.references([r[0] for r in items])['items']
         pending=[];active=0
         for row in items:
-            ref=refs.get(row[0],{})
-            state=ref.get('state','MISSING')
+            ref=refs.get(row[0],{});state=ref.get('state','MISSING')
             if state=='ACTIVE':active+=1
             if state!='ACTIVE' or is_price_outdated(ref.get('reviewed_on'),today(),max_age_days=review_days):
                 pending.append({'Código KSB':row[0],'Descrição':row[1],'Situação':'Revisão vencida' if state=='ACTIVE' else {'MISSING':'Sem folha ativa','INVALID':'Cálculo inválido','FISCAL_CHANGED':'Regra fiscal alterada','UNIT_CHANGED':'Unidade do item alterada'}.get(state,state),'Última revisão':ref.get('reviewed_on')})
         c=st.columns(3);c[0].metric('Itens cadastrados',len(items));c[1].metric('Com folha ativa',active);c[2].metric('Pendências',len(pending))
         st.dataframe(pd.DataFrame(pending),hide_index=True,width='stretch')
-    with tabs[4]:
+    else:
         events=repo.events()
         for event in events:event['created_at']=format_timestamp_sao_paulo(event['created_at'])
         st.dataframe(pd.DataFrame(events),hide_index=True,width='stretch')
-
-
-def render_permissions(actor):
-    service=PricingService()
-    if 'permissions' not in service.permissions(actor):return
-    st.subheader('Permissões de precificação por usuário')
-    users=[u for u in __import__('database').listar_usuarios() if u[3]!='ADMIN']
-    if not users:st.info('Administradores já possuem todas as permissões.');return
-    names={u[2]:f'{u[1]} ({u[2]})' for u in users}
-    target=st.selectbox('Usuário autorizado',list(names),format_func=lambda x:names[x])
-    try:current=service.permissions(target)
-    except PermissionError:st.warning('Usuário inativo; ative-o antes de conceder permissões.');return
-    labels={'view':'Consultar custos e composição','edit':'Criar revisões em rascunho','publish':'Publicar e arquivar folhas','costs':'Alterar custos base e perfis'}
-    with st.form('pricing_permissions'):
-        chosen=[key for key,label in labels.items() if st.checkbox(label,value=key in current,key=f'permission_{target}_{key}')]
-        if st.form_submit_button('Salvar permissões de precificação'):
-            try:service.set_permissions(target,chosen,actor,service.repo.version());st.success('Permissões atualizadas.');st.rerun()
-            except (ValueError,PermissionError) as exc:_error(exc)

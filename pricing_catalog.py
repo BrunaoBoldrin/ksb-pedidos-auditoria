@@ -130,3 +130,18 @@ class CatalogService(PricingService):
             self._advance(c)
             self._event(c,actor,'EDITAR USUÁRIO',user_id,dict(before=plain(old),after=dict(name=name,username=username,profile=profile,active=active,permissions=sorted(chosen))))
             return user_id
+
+    def user_action(self,user_id,action,actor,expected_version,password=None):
+        if action not in ('password','delete'):raise PricingError('Ação de usuário inválida.')
+        if action=='password' and not password:raise PricingError('Informe a nova senha.')
+        with self.repo.transaction() as c:
+            self._lock(c,expected_version);self._require(c,actor,'permissions')
+            c.execute('SELECT id,nome,usuario,perfil,ativo FROM usuarios WHERE id=%s',(user_id,))
+            user=c.fetchone()
+            if not user:raise PricingError('Usuário não encontrado.')
+            if action=='delete':
+                if user['usuario']==actor:raise PricingError('Você não pode excluir o próprio usuário conectado.')
+                c.execute('DELETE FROM usuarios WHERE id=%s',(user_id,))
+            else:c.execute('UPDATE usuarios SET senha=%s WHERE id=%s',(password,user_id))
+            self._advance(c)
+            self._event(c,actor,'EXCLUIR USUÁRIO' if action=='delete' else 'REDEFINIR SENHA',user_id,dict(user=plain(user)))

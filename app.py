@@ -1286,13 +1286,14 @@ elif menu == "🏛 Regras Fiscais":
                 st.rerun()
 
 elif menu == "👤 Usuários":
+    if dynamic_pricing_enabled():
+        from pricing_users import render_users
+        render_users(st.session_state.usuario_logado)
+        st.stop()
     page_header("Usuários", "Gerencie os acessos e os perfis do sistema.")
     if perfil != "ADMIN":
         st.error("Acesso negado.")
         st.stop()
-    if dynamic_pricing_enabled():
-        from pricing_ui import render_permissions
-        render_permissions(st.session_state.usuario_logado)
     def atualizar_usuario(id_usuario, nome, usuario, perfil_usuario, ativo):
         conn = conectar(); cursor = conn.cursor()
         try:
