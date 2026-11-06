@@ -980,7 +980,11 @@ elif menu == "📦 Itens Cadastrados":
             varzea = st.text_input("Código Interno Várzea", value="" if m is None else m["Código Interno Várzea"])
         campos_3 = st.columns(3)
         with campos_3[0]:
-            preco = st.number_input("Preço Unitário Líquido", value=0.0 if m is None else float(m["Preço Unitário Líquido"]), format="%.2f")
+            preco = st.number_input(
+                "Preço Unitário Líquido",
+                value=0.0 if m is None else valor_float(m["Preço Unitário Líquido"]),
+                format="%.2f",
+            )
         with campos_3[1]:
             st.text_input("Data Última Revisão", value=data_auto, disabled=True)
         with campos_3[2]:
