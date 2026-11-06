@@ -131,7 +131,7 @@ class PricingService:
         if not row:raise PricingError('Revisão não encontrada.')
         return dict(row)
 
-    def _publish_prices(self,c,revisions,actor,action,key,fingerprint):
+    def _publish_prices(self,c,revisions,actor,action,key,fingerprint,details=None):
         publication_id=uuid.uuid4().hex
         items=[]
         for revision in revisions:
@@ -152,6 +152,7 @@ class PricingService:
                               after=str(result.net_price),gross=str(result.gross_price),snapshot_id=snapshot_id))
         version=self._advance(c)
         publication=dict(publication_id=publication_id,version=version,count=len(items),items=items)
+        if details is not None:publication['details']=details
         c.execute('INSERT INTO pricing_publications(id,operation_key,fingerprint,version,actor,action,result) VALUES(%s,%s,%s,%s,%s,%s,%s)',
                   (publication_id,key,fingerprint,version,actor,action,json_value(publication)))
         self._event(c,actor,action,publication_id,publication)
@@ -252,11 +253,12 @@ class PricingService:
             return dict(calculation=result.snapshot(),fiscal_context=context)
 
     def preview_profile(self,code,data,reviewed_on,actor,expected_version):
+        code,data,reviewed_on=self._normalize_profile(code,data,reviewed_on)
         with self.repo.transaction() as c:
             self._lock(c,expected_version);self._require(c,actor,'costs')
             c.execute('''INSERT INTO pricing_profiles(code,data,reviewed_on) VALUES(%s,%s,%s)
               ON CONFLICT(code) DO UPDATE SET data=EXCLUDED.data,reviewed_on=EXCLUDED.reviewed_on RETURNING id''',
-              (code,json_value(data),review_date(reviewed_on)))
+              (code,json_value(data),reviewed_on))
             pid=c.fetchone()['id']
             c.execute("SELECT r.*,s.material_code FROM pricing_revisions r JOIN pricing_sheets s ON s.id=r.sheet_id WHERE r.profile_id=%s AND r.status='ACTIVE'",(pid,))
             items=[]
@@ -290,8 +292,10 @@ class PricingService:
             prior=self._prior(c,key,fp)
             if prior:return prior
             self._lock(c,expected_version)
-            c.execute("UPDATE pricing_revisions SET status='ARCHIVED' WHERE sheet_id=(SELECT id FROM pricing_sheets WHERE material_code=%s) AND status='ACTIVE'",(code,))
-            return self._publish_prices(c,[],actor,'ARQUIVAR FOLHA',key,fp)
+            c.execute("UPDATE pricing_revisions SET status='ARCHIVED' WHERE sheet_id=(SELECT id FROM pricing_sheets WHERE material_code=%s) AND status='ACTIVE' RETURNING id,number",(code,))
+            revisions=[dict(id=r['id'],number=r['number'],previous_status='ACTIVE') for r in c.fetchall()]
+            details=dict(code=code,reason=reason.strip(),revisions=revisions)
+            return self._publish_prices(c,[],actor,'ARQUIVAR FOLHA',key,fp,details=details)
 
     def set_permissions(self,username,permissions,actor,expected_version):
         chosen=set(permissions)
@@ -303,13 +307,19 @@ class PricingService:
                          ON CONFLICT(username) DO UPDATE SET permissions=EXCLUDED.permissions,updated_at=now()''',(username,json_value(sorted(chosen))))
             self._advance(c);self._event(c,actor,'PERMISSÕES',username,dict(permissions=sorted(chosen)))
 
-    def save_profile(self,code,data,actor,expected_version,reviewed_on,key):
-        if not code.strip():raise PricingError('Informe o nome do perfil.')
+    @staticmethod
+    def _normalize_profile(code,data,reviewed_on):
+        code=str(code or '').strip()
+        if not code:raise PricingError('Informe o nome do perfil.')
         allowed={'efficiency','taxes','rounding'}
         if not set(data)<=allowed:raise PricingError('Campo de perfil inválido.')
-        number(data.get('efficiency'),'Eficiência',Decimal('0.000001'),Decimal('1'))
-        number(data.get('taxes'),'Impostos',maximum=Decimal('0.999999'))
+        efficiency=number(data.get('efficiency'),'Eficiência',Decimal('0.000001'),Decimal('1'))
+        taxes=number(data.get('taxes'),'Impostos',maximum=Decimal('0.999999'))
         if data.get('rounding') not in ('UP_REAL','CENT'):raise PricingError('Arredondamento inválido.')
+        return code,dict(efficiency=str(efficiency),taxes=str(taxes),rounding=data['rounding']),review_date(reviewed_on)
+
+    def save_profile(self,code,data,actor,expected_version,reviewed_on,key):
+        code,data,reviewed_on=self._normalize_profile(code,data,reviewed_on)
         fp=self._fingerprint(actor,'profile',[code,data,reviewed_on])
         with self.repo.transaction() as c:
             c.execute('SELECT version FROM pricing_control WHERE id=1 FOR UPDATE');self._require(c,actor,'costs')
@@ -318,7 +328,7 @@ class PricingService:
             self._lock(c,expected_version)
             c.execute('''INSERT INTO pricing_profiles(code,data,reviewed_on) VALUES(%s,%s,%s)
               ON CONFLICT(code) DO UPDATE SET data=EXCLUDED.data,reviewed_on=EXCLUDED.reviewed_on,version=pricing_profiles.version+1 RETURNING id''',
-              (code.strip(),json_value(data),review_date(reviewed_on)))
+              (code,json_value(data),reviewed_on))
             pid=c.fetchone()['id']
             c.execute("SELECT r.*,s.material_code FROM pricing_revisions r JOIN pricing_sheets s ON s.id=r.sheet_id WHERE r.profile_id=%s AND r.status='ACTIVE'",(pid,))
             revisions=[dict(r) for r in c.fetchall()]

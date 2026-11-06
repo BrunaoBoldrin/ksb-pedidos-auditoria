@@ -766,6 +766,13 @@ def criar_tabela_regras_fiscais():
     inicializar_banco()
 
 
+def _invalidate_pricing_previews(cursor):
+    """Serialize technical/fiscal edits with price publications in dynamic mode."""
+    from pricing_config import enabled
+    if enabled():
+        cursor.execute('UPDATE pricing_control SET version=version+1 WHERE id=1')
+
+
 def listar_regras_fiscais():
     with _cursor() as cursor:
         cursor.execute(
@@ -780,6 +787,7 @@ def listar_regras_fiscais():
 
 def inserir_regra_fiscal(ncm, aliquota_icms, aliquota_ipi, observacao, ativo=1):
     with _cursor(commit=True) as cursor:
+        _invalidate_pricing_previews(cursor)
         cursor.execute(
             """
             INSERT INTO regras_fiscais (ncm, aliquota_icms, aliquota_ipi, observacao, ativo)
@@ -804,6 +812,7 @@ def buscar_regra_fiscal(id_regra):
 
 def atualizar_regra_fiscal(id_regra, ncm, aliquota_icms, aliquota_ipi, observacao, ativo):
     with _cursor(commit=True) as cursor:
+        _invalidate_pricing_previews(cursor)
         cursor.execute(
             """
             UPDATE regras_fiscais
@@ -820,6 +829,7 @@ def atualizar_regra_fiscal(id_regra, ncm, aliquota_icms, aliquota_ipi, observaca
 
 def excluir_regra_fiscal(id_regra):
     with _cursor(commit=True) as cursor:
+        _invalidate_pricing_previews(cursor)
         cursor.execute("DELETE FROM regras_fiscais WHERE id = %s", (id_regra,))
 
 

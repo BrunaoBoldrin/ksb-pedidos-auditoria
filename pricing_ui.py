@@ -265,9 +265,12 @@ def _profiles_tab(repo,service,actor,permissions,version):
     if 'costs' not in permissions:return
     names={p['code']:p for p in profiles}
     selected=st.selectbox('Perfil para editar',['Novo']+list(names))
+    if st.session_state.get('pricing_profile_selection') != selected:
+        st.session_state.pop('pricing_profile_preview',None)
+        st.session_state.pricing_profile_selection=selected
     profile=names.get(selected,{});values=profile.get('data',{})
-    with st.form('pricing_profile_editor'):
-        code=st.text_input('Nome do perfil',value=profile.get('code',''))
+    with st.form(f'pricing_profile_editor_{profile.get("id","new")}'):
+        code=st.text_input('Nome do perfil',value=profile.get('code',''),disabled=bool(profile))
         efficiency=st.number_input('Eficiência do perfil (%)',0.0001,100.,float(Decimal(values.get('efficiency','1'))*100))
         taxes=st.number_input('Impostos de venda do perfil (%)',0.,99.9999,float(Decimal(values.get('taxes','0'))*100),format='%.4f')
         rounding=st.selectbox('Arredondamento do perfil',list(ROUNDINGS),index=list(ROUNDINGS).index(values.get('rounding','CENT')),format_func=lambda x:ROUNDINGS[x])

@@ -35,6 +35,7 @@ def save_item(values,actor):
     data=[database._limpar_texto(values.get(field,'')) for field in FIELDS]
     if not data[0] or not data[1]:raise ValueError('Informe código KSB e descrição.')
     with database._cursor(commit=True) as c:
+        database._invalidate_pricing_previews(c)
         require_item_editor(c,actor)
         assignments=','.join(f'{field}=EXCLUDED.{field}' for field in FIELDS[1:])
         c.execute('INSERT INTO materiais ('+','.join(FIELDS)+') VALUES('+','.join(['%s']*8)+
@@ -43,6 +44,7 @@ def save_item(values,actor):
 
 def delete_item(code,actor):
     with database._cursor(commit=True) as c:
+        database._invalidate_pricing_previews(c)
         require_item_editor(c,actor)
         c.execute('SELECT 1 FROM pricing_sheets WHERE material_code=%s',(code,))
         if c.fetchone():raise ValueError('Item possui folha/histórico vinculado e deve ser preservado.')
