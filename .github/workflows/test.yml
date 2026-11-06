@@ -12,6 +12,20 @@ permissions:
 jobs:
   unittest:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pricing_tests
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PRICING_TEST_DSN: postgresql://postgres:postgres@localhost:5432/pricing_tests
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

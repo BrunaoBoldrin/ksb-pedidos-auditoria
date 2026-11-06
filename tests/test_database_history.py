@@ -54,6 +54,19 @@ class DatabaseMigrationTests(unittest.TestCase):
 
 
 class DatabaseRepositoryTests(unittest.TestCase):
+    def test_audit_retains_original_pricing_snapshot_and_version(self):
+        cursor = FakeCursor(fetchone_values=[(101,), (201,)])
+        context = dict(state='ACTIVE', snapshot_id=72, revision=3, price='120.00')
+        item = {'Status':'OK', 'Status Comercial':'OK', 'Memória Preço ID':72,
+                'Versão Precificação':11, 'Contexto Precificação':context}
+        with patch.object(database, '_cursor', cursor_context(cursor)):
+            database.registrar_auditoria_pedido({'Pedido':'1'}, [item], 'admin', False, False, False, 'teste.pdf')
+        snapshot_writes = [params for statement, params in cursor.executions if statement.startswith('UPDATE auditorias SET pricing_snapshot_id')]
+        self.assertEqual(len(snapshot_writes), 1)
+        self.assertEqual(snapshot_writes[0][:2], (72, 11))
+        self.assertEqual(snapshot_writes[0][2].adapted, context)
+        self.assertEqual(snapshot_writes[0][3], 201)
+
     def material_args(self, price):
         return (
             "WGS-5520",

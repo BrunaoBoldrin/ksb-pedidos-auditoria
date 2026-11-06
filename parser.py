@@ -2,6 +2,7 @@ import re
 import pdfplumber
 import pandas as pd
 from database import buscar_material_por_codigo, localizar_regra_fiscal_por_ncm
+from pricing_config import enabled as dynamic_pricing_enabled
 from price_rules import is_price_outdated
 from system_settings import normalize_system_settings
 
@@ -255,6 +256,11 @@ def processar_pdf(PDF_PATH, price_reference_date=None, settings=None):
     # ====================================
     # LOOP ITENS
     # ====================================
+
+    pricing_refs = None
+    if dynamic_pricing_enabled():
+        from pricing_repository import PricingRepository
+        pricing_refs = PricingRepository().references([m.group('codigo_material') for m in matches])
 
     for i in range(len(matches)):
         inicio = matches[i].start()
@@ -531,12 +537,24 @@ def processar_pdf(PDF_PATH, price_reference_date=None, settings=None):
         data_ultima_revisao_preco = ""
         usuario_ultima_revisao_preco = ""
 
+        pricing_reference = (pricing_refs or {}).get('items', {}).get(codigo_material, {})
         if not material_cadastrado:
             status_comercial = "PENDENTE - MATERIAL SEM CADASTRO"
             diagnostico_comercial = montar_diagnostico(
                 "MATERIAL SEM CADASTRO",
                 f"Cadastre o material {codigo_material} para validar NCM, impostos e preço.",
             )
+        elif pricing_refs is not None:
+            from pricing_analysis import evaluate_price
+            evaluated = evaluate_price(preco_pedido_ksb, quantidade_float, unidade_item,
+                                       pricing_reference, price_reference_date, settings)
+            status_comercial = evaluated['status']
+            diagnostico_comercial = evaluated['diagnosis']
+            preco_cadastrado = float(evaluated['price']) if evaluated['price'] is not None else 0.0
+            diferenca_preco = float(evaluated['difference']) if evaluated['difference'] is not None else 0.0
+            percentual_diferenca_preco = float(evaluated['percentage']) if evaluated['percentage'] is not None else 0.0
+            data_ultima_revisao_preco = pricing_reference.get('reviewed_on') or ''
+            usuario_ultima_revisao_preco = pricing_reference.get('published_by') or ''
         else:
             preco_cadastrado = numero_para_float(material_cadastrado.get("preco_unitario_liquido"))
             data_ultima_revisao_preco = str(material_cadastrado.get("data_ultima_revisao") or "")
@@ -664,7 +682,7 @@ def processar_pdf(PDF_PATH, price_reference_date=None, settings=None):
                 "Divergencias": ("\n".join(divergencias) if divergencias else "-"),
                 "Status Comercial": status_comercial,
                 "Preço Pedido KSB": preco_pedido_ksb,
-                "Preço Cadastrado": preco_cadastrado if material_cadastrado else "",
+                "Preço Cadastrado": preco_cadastrado if material_cadastrado and (pricing_refs is None or pricing_reference.get('state') == 'ACTIVE') else "",
                 "Diferença Preço": diferenca_preco if material_cadastrado else "",
                 "Percentual Diferença Preço": percentual_diferenca_preco if material_cadastrado else "",
                 "Data Última Revisão Preço": data_ultima_revisao_preco,
@@ -672,6 +690,12 @@ def processar_pdf(PDF_PATH, price_reference_date=None, settings=None):
                 "Leadtime Dias": leadtime,
                 "Diagnóstico Comercial": diagnostico_comercial,
                 "Leadtime": leadtime,
+                **({"Origem Preço": "FOLHA DE PROCESSO", "Revisão Folha": pricing_reference.get('revision'),
+                    "Memória Preço ID": pricing_reference.get('snapshot_id'),
+                    "Versão Precificação": pricing_refs['version'],
+                    "Contexto Precificação": {**pricing_reference, 'version': pricing_refs['version']},
+                    "Diferença Total Preço": float(evaluated['total_difference']) if material_cadastrado and evaluated['total_difference'] is not None else ""}
+                   if pricing_refs is not None else {}),
             }
         )
 
