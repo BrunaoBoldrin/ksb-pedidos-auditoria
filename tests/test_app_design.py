@@ -84,6 +84,20 @@ class AppDesignTests(unittest.TestCase):
         self.assertEqual(len(at.exception), 0)
         return at
 
+    def test_dynamic_mode_routes_items_without_legacy_price_inputs(self):
+        with patch.dict('os.environ', KSB_DYNAMIC_PRICING='1'), \
+             patch('pricing_service.PricingService.permissions', return_value={'view','edit','publish','costs'}), \
+             patch('pricing_items.list_items', return_value=[]):
+            at = self.app()
+            self.assertTrue(any(b.label == '💰 Precificação' for b in at.sidebar.button))
+            self.assertFalse(any(b.label == '💰 Revisão de Preços' for b in at.sidebar.button))
+            next(b for b in at.sidebar.button if 'Itens Cadastrados' in b.label).click().run()
+            self.assertEqual(len(at.exception), 0)
+            at.button(key='technical_new').click().run()
+            self.assertEqual(len(at.exception), 0)
+            self.assertFalse(any('preço' in w.label.lower() for w in at.text_input))
+            self.assertEqual(len(at.number_input), 0)
+
     def test_cached_batch_survives_filter_rerun_without_new_audit(self):
         at = self.cached_app()
         at.radio(key="filtro_resultados").set_value("Com pendência").run()

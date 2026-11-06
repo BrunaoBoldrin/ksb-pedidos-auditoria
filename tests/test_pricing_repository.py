@@ -123,5 +123,52 @@ class RepositoryTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as pool: results=list(pool.map(save,['A','B']))
         self.assertCountEqual(results,['ok','stale'])
 
+    def test_unconfirmed_revision_cannot_replace_active_sheet(self):
+        self.activate()
+        draft=self.service.save_draft('A',self.data(confirmed=False),'admin',self.repo.version())
+        with self.assertRaises(PricingError):
+            self.service.activate(draft['id'],'admin',self.repo.version(),uuid.uuid4().hex)
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
+
+    def test_fiscal_change_blocks_old_gross_reference_until_republication(self):
+        rev=self.activate(basis='GROSS')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'148.84')
+        conn=self.connect()
+        with conn,conn.cursor() as c:c.execute('UPDATE regras_fiscais SET aliquota_icms=12')
+        conn.close()
+        self.assertEqual(self.repo.references(['A'])['items']['A']['state'],'FISCAL_CHANGED')
+        self.service.activate(rev['id'],'admin',self.repo.version(),uuid.uuid4().hex)
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'159.72')
+
+    def test_shared_profile_recalculates_current_sheets_and_keeps_old_snapshot(self):
+        self.service.save_profile('Teste',dict(efficiency='1',taxes='0.3',rounding='CENT'),
+                                  'admin',self.repo.version(),'2026-11-06',uuid.uuid4().hex)
+        profile=self.repo.list_profiles()[0]
+        self.activate(profile_id=profile['id'])
+        old=self.repo.references(['A'])['items']['A']
+        preview=self.service.preview_profile('Teste',dict(efficiency='1',taxes='0.2',rounding='CENT'),
+                                             '2026-11-06','admin',self.repo.version())
+        self.assertEqual(preview['items'][0]['after'],'166.67')
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'200.00')
+        self.service.save_profile('Teste',dict(efficiency='1',taxes='0.2',rounding='CENT'),
+                                  'admin',preview['version'],'2026-11-06',preview['key'])
+        self.assertEqual(self.repo.references(['A'])['items']['A']['price'],'166.67')
+        self.assertEqual(self.repo.snapshot(old['snapshot_id'])['net_price'],'200.00')
+
+    def test_changing_item_unit_requires_republication(self):
+        self.activate()
+        conn=self.connect()
+        with conn,conn.cursor() as c:c.execute("UPDATE materiais SET unidade_medida='KG' WHERE codigo_material='A'")
+        conn.close()
+        ref=self.repo.references(['A'])['items']['A']
+        self.assertEqual(ref['state'],'UNIT_CHANGED')
+        self.assertIsNone(ref['price'])
+
+    def test_archived_revision_must_be_copied_before_activation(self):
+        rev=self.activate()
+        self.service.archive('A','admin',self.repo.version(),'Fim da revisão',uuid.uuid4().hex)
+        with self.assertRaises(PricingError):
+            self.service.activate(rev['id'],'admin',self.repo.version(),uuid.uuid4().hex)
+
 
 if __name__=='__main__': unittest.main()

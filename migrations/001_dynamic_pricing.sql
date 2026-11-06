@@ -65,3 +65,6 @@ CREATE TABLE IF NOT EXISTS pricing_legacy_prices (
 INSERT INTO pricing_legacy_prices(material_code,data)
  SELECT codigo_material,jsonb_build_object('price',preco_revisado,'reviewed_on',data_ultima_revisao,
  'reviewed_by',usuario_ultima_revisao_preco) FROM materiais ON CONFLICT DO NOTHING;
+ALTER TABLE IF EXISTS auditorias ADD COLUMN IF NOT EXISTS pricing_snapshot_id bigint REFERENCES pricing_prices(id);
+ALTER TABLE IF EXISTS auditorias ADD COLUMN IF NOT EXISTS pricing_version bigint;
+ALTER TABLE IF EXISTS auditorias ADD COLUMN IF NOT EXISTS pricing_context jsonb;

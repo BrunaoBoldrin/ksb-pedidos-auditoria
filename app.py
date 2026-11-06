@@ -60,6 +60,7 @@ from ui_rules import (
     format_timestamp_sao_paulo,
     menu_options_for_profile,
 )
+from pricing_config import enabled as dynamic_pricing_enabled
 
 st.set_page_config(page_title="Analisador de Pedidos", page_icon="📄", layout="wide")
 
@@ -241,6 +242,9 @@ def percentual_relevante(valor):
 
 
 def calcular_preco_cadastrado_com_imposto(linha):
+    context = linha.get('Contexto Precificação')
+    if isinstance(context, dict) and context.get('state') == 'ACTIVE' and context.get('fiscal_context', {}).get('basis') == 'GROSS':
+        return valor_float(context.get('gross_price'))
     preco_cadastrado = linha.get("Preço Cadastrado")
     if valor_texto({"Preço Cadastrado": preco_cadastrado}, "Preço Cadastrado", "") == "":
         return ""
@@ -473,6 +477,9 @@ def moeda_para_float_importacao(valor):
 
 
 def preparar_planilha_materiais(arquivo_excel):
+    if dynamic_pricing_enabled():
+        from pricing_items import import_items
+        return import_items(arquivo_excel)
     abas = pd.read_excel(arquivo_excel, sheet_name=None, dtype=str)
     partes = []
     relatorio_abas = []
@@ -545,6 +552,17 @@ def exibir_resultados_processamento(resultados):
     df_final = pd.concat(todos_dados, ignore_index=True)
     df_analise_final = pd.concat(todas_analises, ignore_index=True)
     df_analise_final = garantir_preco_cadastrado_com_imposto(df_analise_final)
+    if dynamic_pricing_enabled() and 'Contexto Precificação' in df_analise_final:
+        from pricing_repository import PricingRepository
+        current = PricingRepository().references(df_analise_final['Código Material'].unique().tolist())['items']
+        changed = any(
+            isinstance(row.get('Contexto Precificação'), dict) and
+            (current.get(row['Código Material'], {}).get('snapshot_id') != row['Contexto Precificação'].get('snapshot_id') or
+             current.get(row['Código Material'], {}).get('state') != row['Contexto Precificação'].get('state'))
+            for row in df_analise_final.to_dict('records')
+        )
+        if changed:
+            st.info('A referência de preço mudou após esta análise. O resultado abaixo conserva os valores originais; reavalie o pedido para conferir o preço vigente.')
     exibir_cards_auditoria(df_analise_final)
     nome_pdf_fiscal = titulo_avaliacao_pedidos(df_analise_final, "Fiscal")
     nome_pdf_comercial = titulo_avaliacao_pedidos(df_analise_final, "Comercial")
@@ -670,6 +688,16 @@ perfil = st.session_state.perfil_usuario
 usuario_revisao_atual = st.session_state.nome_usuario or st.session_state.usuario_logado
 configuracoes_sistema = buscar_configuracoes_sistema()
 opcoes_menu = menu_options_for_profile(perfil)
+pricing_permissions = set()
+if dynamic_pricing_enabled():
+    from pricing_service import PricingService
+    try:
+        pricing_permissions = PricingService().permissions(st.session_state.usuario_logado)
+    except PermissionError as exc:
+        st.error(str(exc)); st.stop()
+    opcoes_menu = [option for option in opcoes_menu if option != '💰 Revisão de Preços']
+    if 'view' in pricing_permissions:
+        opcoes_menu.insert(2 if len(opcoes_menu) >= 2 else 1, '💰 Precificação')
 
 if st.session_state.get("pagina_atual") not in opcoes_menu:
     st.session_state.pagina_atual = opcoes_menu[0]
@@ -818,7 +846,15 @@ if menu == "📄 Análise de Pedidos KSB":
         exibir_resultados_processamento(st.session_state.resultados_processados)
 
 
+elif menu == '💰 Precificação':
+    from pricing_ui import render_pricing
+    render_pricing(st.session_state.usuario_logado, configuracoes_sistema.price_review_days)
+
 elif menu == "📦 Itens Cadastrados":
+    if dynamic_pricing_enabled():
+        from pricing_ui import render_items
+        render_items(st.session_state.usuario_logado, pode_editar_materiais, 'view' in pricing_permissions)
+        st.stop()
     page_header("Itens Cadastrados", "Consulte os materiais e mantenha os preços de referência atualizados.")
     for chave, valor in [("modo_material", None), ("material_em_edicao", None), ("confirmar_exclusao", False), ("mostrar_importacao", False)]:
         if chave not in st.session_state:
@@ -1254,6 +1290,9 @@ elif menu == "👤 Usuários":
     if perfil != "ADMIN":
         st.error("Acesso negado.")
         st.stop()
+    if dynamic_pricing_enabled():
+        from pricing_ui import render_permissions
+        render_permissions(st.session_state.usuario_logado)
     def atualizar_usuario(id_usuario, nome, usuario, perfil_usuario, ativo):
         conn = conectar(); cursor = conn.cursor()
         try:

@@ -93,6 +93,8 @@ class PricingRepository:
         for row in rows:
             state='ACTIVE' if row['snapshot_id'] else ('INVALID' if row['revision_id'] else 'MISSING')
             context=row['fiscal_context'] or {}
+            if state=='ACTIVE' and context.get('unit') is not None and str(row['unidade_medida'])!=str(context['unit']):
+                state='UNIT_CHANGED'
             if state=='ACTIVE' and context.get('basis')=='GROSS':
                 if str(row['ncm'])!=context.get('ncm') or row['current_icms'] is None or Decimal(str(row['current_icms']))!=Decimal(str(context.get('icms'))):
                     state='FISCAL_CHANGED'
@@ -101,7 +103,7 @@ class PricingRepository:
               snapshot_id=row['snapshot_id'],revision_id=row['revision_id'],revision=row['number'],
               reviewed_on=str(row['reviewed_on']) if row['reviewed_on'] else None,
               published_by=row['actor'],published_at=str(row['created_at']) if row['created_at'] else None,
-              unit=row['unidade_medida'],fiscal_context=context)
+              unit=context.get('unit',row['unidade_medida']),fiscal_context=context)
         return dict(version=version,items=items)
 
     def events(self,limit=300):

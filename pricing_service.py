@@ -77,6 +77,10 @@ class PricingService:
     def _write_base(self,c,kind,data):
         if kind not in TABLES:raise PricingError('Tipo de custo inválido.')
         data=self._normalize_base(data)
+        c.execute(f'SELECT id FROM {TABLES[kind]} WHERE code=%s',(data['code'],))
+        duplicate=c.fetchone()
+        if duplicate and duplicate['id']!=data.get('id'):
+            raise PricingError('Já existe um custo com esse código nesta tabela.')
         fields=('code','description','unit','price','factor','kg_m2','length_mm','per_person','reviewed_on','active','note')
         if data.get('id'):
             c.execute(f'SELECT * FROM {TABLES[kind]} WHERE id=%s',(data['id'],));old=c.fetchone()
@@ -104,7 +108,10 @@ class PricingService:
                 c.execute(f'SELECT * FROM {TABLES[kind]} WHERE id=%s',(key[1],));base=c.fetchone()
                 if not base:raise PricingError('Custo base não encontrado.')
                 bases[key]=dict(base)
-        context=dict(basis=data.get('basis'),ncm=None,icms=None,ipi=None)
+        c.execute('SELECT ncm,unidade_medida FROM materiais WHERE codigo_material=%s',(revision['material_code'],))
+        material=c.fetchone()
+        if not material:raise PricingError('Item KSB não encontrado.')
+        context=dict(basis=data.get('basis'),ncm=material['ncm'],unit=material['unidade_medida'],icms=None,ipi=None)
         divisor=None
         if data.get('basis')=='GROSS':
             c.execute('''SELECT m.ncm,f.aliquota_icms,f.aliquota_ipi FROM materiais m
@@ -155,6 +162,7 @@ class PricingService:
         with self.repo.transaction() as c:
             self._require(c,actor,'costs')
             c.execute('SELECT version FROM pricing_control WHERE id=1 FOR UPDATE')
+            self._require(c,actor,'costs')
             prior=self._prior(c,key,fp)
             if prior:return prior['base']
             self._lock(c,expected_version)
@@ -185,6 +193,7 @@ class PricingService:
         with self.repo.transaction() as c:
             self._require(c,actor,'costs')
             c.execute('SELECT version FROM pricing_control WHERE id=1 FOR UPDATE');version=c.fetchone()['version']
+            self._require(c,actor,'costs')
             revisions=self._dependents(c,changes)
             for kind,data in changes:self._write_base(c,kind,data)
             items=[]
@@ -201,6 +210,7 @@ class PricingService:
         with self.repo.transaction() as c:
             self._require(c,actor,'costs')
             c.execute('SELECT version FROM pricing_control WHERE id=1 FOR UPDATE')
+            self._require(c,actor,'costs')
             prior=self._prior(c,key,fp)
             if prior:return prior
             self._lock(c,expected_version)
@@ -213,7 +223,7 @@ class PricingService:
     def save_draft(self,code,data,actor,expected_version):
         if not isinstance(data.get('lines',[]),list) or len(data.get('lines',[]))>500:raise PricingError('Composição inválida ou acima de 500 linhas.')
         with self.repo.transaction() as c:
-            self._require(c,actor,'edit');self._lock(c,expected_version)
+            self._lock(c,expected_version);self._require(c,actor,'edit')
             c.execute('INSERT INTO pricing_sheets(material_code,created_by) VALUES(%s,%s) ON CONFLICT(material_code) DO UPDATE SET material_code=EXCLUDED.material_code RETURNING id',(code,actor))
             sid=c.fetchone()['id']
             c.execute('SELECT coalesce(max(number),0)+1 AS n FROM pricing_revisions WHERE sheet_id=%s',(sid,));n=c.fetchone()['n']
@@ -229,18 +239,44 @@ class PricingService:
 
     def preview_sheet(self,revision_id,actor):
         with self.repo.transaction() as c:
+            c.execute('SELECT version FROM pricing_control WHERE id=1 FOR SHARE')
             self._require(c,actor,'view');revision=self._revision(c,revision_id)
             result,context=self._calculate(c,revision)
             return dict(calculation=result.snapshot(),fiscal_context=context)
+
+    def preview_draft(self,code,data,actor,expected_version):
+        with self.repo.transaction() as c:
+            self._lock(c,expected_version);self._require(c,actor,'view')
+            revision=dict(data=data,profile_id=data.get('profile_id'),material_code=code)
+            result,context=self._calculate(c,revision)
+            return dict(calculation=result.snapshot(),fiscal_context=context)
+
+    def preview_profile(self,code,data,reviewed_on,actor,expected_version):
+        with self.repo.transaction() as c:
+            self._lock(c,expected_version);self._require(c,actor,'costs')
+            c.execute('''INSERT INTO pricing_profiles(code,data,reviewed_on) VALUES(%s,%s,%s)
+              ON CONFLICT(code) DO UPDATE SET data=EXCLUDED.data,reviewed_on=EXCLUDED.reviewed_on RETURNING id''',
+              (code,json_value(data),review_date(reviewed_on)))
+            pid=c.fetchone()['id']
+            c.execute("SELECT r.*,s.material_code FROM pricing_revisions r JOIN pricing_sheets s ON s.id=r.sheet_id WHERE r.profile_id=%s AND r.status='ACTIVE'",(pid,))
+            items=[]
+            for revision in c.fetchall():
+                result,_=self._calculate(c,dict(revision))
+                items.append(dict(code=revision['material_code'],after=str(result.net_price),gross=str(result.gross_price)))
+            c.execute('ROLLBACK')
+            return dict(version=expected_version,items=items,key=uuid.uuid4().hex)
 
     def activate(self,revision_id,actor,expected_version,key):
         fp=self._fingerprint(actor,'activate',revision_id)
         with self.repo.transaction() as c:
             self._require(c,actor,'publish')
             c.execute('SELECT version FROM pricing_control WHERE id=1 FOR UPDATE')
+            self._require(c,actor,'publish')
             prior=self._prior(c,key,fp)
             if prior:return prior
             self._lock(c,expected_version);rev=self._revision(c,revision_id)
+            if rev['status']=='ARCHIVED':
+                raise PricingError('Copie a composição arquivada para um novo rascunho antes de publicar.')
             self._calculate(c,rev)
             c.execute("UPDATE pricing_revisions SET status='ARCHIVED' WHERE sheet_id=%s AND status='ACTIVE'",(rev['sheet_id'],))
             c.execute("UPDATE pricing_revisions SET status='ACTIVE' WHERE id=%s",(revision_id,))
@@ -250,7 +286,7 @@ class PricingService:
         if not reason.strip():raise PricingError('Informe o motivo do arquivamento.')
         fp=self._fingerprint(actor,'archive',[code,reason])
         with self.repo.transaction() as c:
-            self._require(c,actor,'publish');c.execute('SELECT version FROM pricing_control WHERE id=1 FOR UPDATE')
+            c.execute('SELECT version FROM pricing_control WHERE id=1 FOR UPDATE');self._require(c,actor,'publish')
             prior=self._prior(c,key,fp)
             if prior:return prior
             self._lock(c,expected_version)
@@ -262,12 +298,13 @@ class PricingService:
         if not chosen<= {'view','edit','publish','costs'}:raise PricingError('Permissões inválidas.')
         if chosen:chosen.add('view')
         with self.repo.transaction() as c:
-            self._require(c,actor,'permissions');self._lock(c,expected_version)
+            self._lock(c,expected_version);self._require(c,actor,'permissions')
             c.execute('''INSERT INTO pricing_permissions(username,permissions) VALUES(%s,%s)
                          ON CONFLICT(username) DO UPDATE SET permissions=EXCLUDED.permissions,updated_at=now()''',(username,json_value(sorted(chosen))))
             self._advance(c);self._event(c,actor,'PERMISSÕES',username,dict(permissions=sorted(chosen)))
 
     def save_profile(self,code,data,actor,expected_version,reviewed_on,key):
+        if not code.strip():raise PricingError('Informe o nome do perfil.')
         allowed={'efficiency','taxes','rounding'}
         if not set(data)<=allowed:raise PricingError('Campo de perfil inválido.')
         number(data.get('efficiency'),'Eficiência',Decimal('0.000001'),Decimal('1'))
@@ -275,7 +312,7 @@ class PricingService:
         if data.get('rounding') not in ('UP_REAL','CENT'):raise PricingError('Arredondamento inválido.')
         fp=self._fingerprint(actor,'profile',[code,data,reviewed_on])
         with self.repo.transaction() as c:
-            self._require(c,actor,'costs');c.execute('SELECT version FROM pricing_control WHERE id=1 FOR UPDATE')
+            c.execute('SELECT version FROM pricing_control WHERE id=1 FOR UPDATE');self._require(c,actor,'costs')
             prior=self._prior(c,key,fp)
             if prior:return prior
             self._lock(c,expected_version)

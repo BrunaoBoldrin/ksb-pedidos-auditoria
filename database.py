@@ -379,6 +379,10 @@ def listar_metadados_configuracoes():
 
 
 def listar_materiais():
+    from pricing_config import enabled
+    if enabled():
+        from pricing_items import list_items
+        return [(r[0],r[1],r[2],None,None) for r in list_items()]
     with _cursor() as cursor:
         cursor.execute(
             """
@@ -391,6 +395,10 @@ def listar_materiais():
 
 
 def listar_materiais_completo():
+    from pricing_config import enabled
+    if enabled():
+        from pricing_items import list_items
+        return list_items()
     with _cursor() as cursor:
         cursor.execute(
             """
@@ -405,6 +413,11 @@ def listar_materiais_completo():
 
 
 def buscar_material(codigo):
+    from pricing_config import enabled
+    if enabled():
+        from pricing_items import get_item, FIELDS
+        item=get_item(codigo)
+        return tuple(item.get(k) for k in FIELDS) if item else None
     codigo = _limpar_codigo(codigo)
     with _cursor() as cursor:
         cursor.execute("SELECT * FROM materiais WHERE BTRIM(codigo_material) = %s LIMIT 1", (codigo,))
@@ -412,6 +425,10 @@ def buscar_material(codigo):
 
 
 def buscar_material_por_codigo(codigo_material):
+    from pricing_config import enabled
+    if enabled():
+        from pricing_items import get_item
+        return get_item(codigo_material)
     codigo_material = _limpar_codigo(codigo_material)
     with _cursor() as cursor:
         cursor.execute(
@@ -459,6 +476,9 @@ def atualizar_material(
     usuario_ultima_revisao_preco=None,
     origem_alteracao="ALTERAÇÃO PELO SISTEMA",
 ):
+    from pricing_config import enabled
+    if enabled():
+        raise ValueError('Use o cadastro técnico. Preços são publicados exclusivamente pela folha de processo.')
     codigo_material = _limpar_codigo(codigo_material)
     descricao = _limpar_texto(descricao)
     material = _limpar_texto(material)
@@ -705,6 +725,12 @@ def registrar_auditoria_pedido(
                     _numero_ou_none(item.get("Diferença Preço")),
                 ),
             )
+            if 'Contexto Precificação' in item:
+                from pricing_repository import json_value
+                cursor.execute('''UPDATE auditorias SET pricing_snapshot_id=%s,pricing_version=%s,pricing_context=%s
+                                  WHERE pedido_item_id=%s''',
+                               (item.get('Memória Preço ID'),item.get('Versão Precificação'),
+                                json_value(item['Contexto Precificação']),pedido_item_id))
 
     return pedido_id
 
@@ -866,4 +892,10 @@ def excluir_usuario(id_usuario):
 
 
 if all(os.environ.get(name) for name in _REQUIRED_ENV_VARS):
+    from pricing_config import enabled, ensure_test_database
+    if enabled():
+        ensure_test_database()
     inicializar_banco()
+    if enabled():
+        from pricing_repository import PricingRepository
+        PricingRepository().migrate()
