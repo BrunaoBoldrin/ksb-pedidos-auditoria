@@ -18,6 +18,9 @@ Usuários continuam sendo selecionados na tabela. Perfil, situação e permissõ
 - Bloqueio de um custo ou perfil usado por folha ativa é recusado com orientação para substituir a referência antes; evita retirar custos obrigatórios silenciosamente.
 - Preços propostos na folha exigem permissão de custos; salvar rascunho não altera custo global nem preço vigente.
 - Publicar proposta de preço já vencida é recusado; nova simulação/edição deve usar o custo atual.
+- Trocar somente o insumo carrega o preço e a unidade de custo do novo insumo, sem propor alteração global indevida.
+- Reabrir uma proposta preserva sua versão original; reconciliar usa a ação explícita Atualizar preços da folha.
+- Alterar o perfil preserva os campos locais e a composição; somente eficiência, impostos e arredondamento recebem os valores do perfil.
 - Sem alteração de produção; primeiro destino continua sendo teste e seu banco isolado.
 - Exemplos e testes publicados são sintéticos.
 

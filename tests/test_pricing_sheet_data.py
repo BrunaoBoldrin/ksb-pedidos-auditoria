@@ -32,3 +32,20 @@ class SheetDataTests(unittest.TestCase):
         catalog=self.catalog();catalog['process']=catalog.pop('component');catalog['component']=[]
         data=dict(lines=[dict(kind='process',base_id=1,people='1.0',minutes='10')])
         self.assertEqual(sheet_rows(data,catalog)['process'][0]['Pessoas'],1)
+
+    def test_changing_base_alone_never_proposes_old_price_for_new_base(self):
+        catalog=self.catalog()
+        catalog['component'].append(dict(catalog['component'][0],id=2,code='OUTRO',price='100',version=5))
+        rows=sheet_rows(dict(lines=[dict(kind='component',base_id=1)]),catalog)
+        rows['component'][0]['Base']='OUTRO — Parafuso teste'
+        lines,proposals=composition_from_rows(rows,catalog,date(2026,11,6))
+        self.assertEqual(lines[0]['base_id'],2)
+        self.assertEqual(proposals,[])
+
+    def test_reopening_proposed_price_keeps_original_cost_version(self):
+        catalog=self.catalog();catalog['component'][0]['price']='100'
+        proposed=[dict(kind='component',base_id=1,price='80',version=1,reviewed_on='2026-11-01')]
+        rows=sheet_rows(dict(lines=[dict(kind='component',base_id=1)],proposed_prices=proposed),catalog)
+        _,proposals=composition_from_rows(rows,catalog,date(2026,11,6))
+        self.assertEqual(proposals[0]['price'],'80')
+        self.assertEqual(proposals[0]['version'],1)

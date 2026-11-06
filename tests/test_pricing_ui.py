@@ -6,6 +6,59 @@ import pricing_items
 
 
 class PricingScreensTests(unittest.TestCase):
+    def test_switching_sheet_base_loads_new_cost_without_proposing_global_price_change(self):
+        from pricing_repository import PricingRepository
+        from pricing_catalog import CatalogService
+        a=dict(id=1,code='A',description='Componente A',unit='UN',price='10',factor='1',active=True,version=1,reviewed_on='2026-11-06')
+        b=dict(a,id=2,code='B',description='Componente B',price='100',version=2)
+        data=dict(lines=[dict(kind='component',base_id=1)],margin='0.2',taxes='0',efficiency='1',commission='0',basis='NET',confirmed=True,rounding='CENT',reviewed_on='2026-11-06')
+        row=dict(revision_id=1,number=1,status='DRAFT',material_code='001',descricao='Peça teste',data=data,snapshot_id=None,net_price=None,gross_price=None,reviewed_on=None)
+        snapshot=dict(version=8,bases=dict(material=[],component=[a,b],process=[],service=[]),profiles=[])
+        saved=[]
+        def save(code,params,actor,version):saved.append(params);return dict(id=2,number=2)
+        with patch.object(PricingRepository,'sheets',return_value=[row]),patch.object(PricingRepository,'catalog',return_value=snapshot), \
+             patch.object(CatalogService,'permissions',return_value={'view','edit'}),patch.object(CatalogService,'save_draft',side_effect=save):
+            app=AppTest.from_string('from pricing_sheets_ui import render_sheets\nrender_sheets("editor")',default_timeout=15).run()
+            app.session_state['pricing_sheets_table']={'edited_rows':{0:{'Selecionar':True}},'added_rows':[],'deleted_rows':[]}
+            app.run();next(x for x in app.button if x.label=='Editar folha').click().run()
+            grid=next(d for d in app.dataframe if '_component_' in str(d.key))
+            app.session_state[grid.key]={'edited_rows':{0:{'Base':'B — Componente B'}},'added_rows':[],'deleted_rows':[]}
+            app.run()
+            grid=next(d for d in app.dataframe if '_component_' in str(d.key))
+            self.assertEqual(grid.value.iloc[0]['Preço (R$)'],'100')
+            next(x for x in app.button if x.label=='Salvar rascunho').click().run()
+            self.assertEqual(len(app.exception),0)
+            self.assertEqual(saved[0]['proposed_prices'],[])
+            self.assertEqual(saved[0]['lines'][0]['base_id'],2)
+
+    def test_sheet_profile_switch_preserves_edited_margin_and_time(self):
+        from pricing_repository import PricingRepository
+        from pricing_catalog import CatalogService
+        base=dict(id=1,code='MDO',description='Operação',unit='H',price='60',factor='1',active=True,per_person=True,reviewed_on='2026-11-06',version=1)
+        data=dict(lines=[dict(kind='process',base_id=1,minutes='10')],margin='0.2',taxes='0',efficiency='1',commission='0',tool_cost='0',basis='NET',confirmed=True,rounding='CENT',reviewed_on='2026-11-06')
+        row=dict(revision_id=1,number=1,status='DRAFT',material_code='001',descricao='Peça teste',unidade_medida='UN',data=data,snapshot_id=None,net_price=None,gross_price=None,reviewed_on=None)
+        profile=dict(id=1,code='GERAL',data=dict(efficiency='0.65',taxes='0.3',rounding='CENT'),active=True,version=1,reviewed_on='2026-11-06')
+        snapshot=dict(version=8,bases=dict(material=[],component=[],process=[base],service=[]),profiles=[profile])
+        calculation=dict(cost='10',gross_price='12.50',net_price='12.50',reviewed_on='2026-11-06',breakdown=dict(material='0',component='0',process='10',service='0',tool='0'),lines=[])
+        payloads=[]
+        def preview(code,params,actor,version):payloads.append(params);return dict(calculation=calculation)
+        with patch.object(PricingRepository,'sheets',return_value=[row]),patch.object(PricingRepository,'catalog',return_value=snapshot), \
+             patch.object(CatalogService,'permissions',return_value={'view','edit','costs'}), \
+             patch.object(CatalogService,'preview_draft',side_effect=preview):
+            app=AppTest.from_string('from pricing_sheets_ui import render_sheets\nrender_sheets("admin")',default_timeout=15).run()
+            app.session_state['pricing_sheets_table']={'edited_rows':{0:{'Selecionar':True}},'added_rows':[],'deleted_rows':[]}
+            app.run();next(b for b in app.button if b.label=='Editar folha').click().run()
+            next(n for n in app.number_input if n.label=='Margem bruta (%)').set_value(35)
+            grid=next(d for d in app.dataframe if 'Minutos' in d.value.columns)
+            app.session_state[grid.key]={'edited_rows':{0:{'Minutos':25}},'added_rows':[],'deleted_rows':[]}
+            next(b for b in app.button if b.label=='Simular composição').click().run()
+            next(s for s in app.selectbox if s.label=='Perfil compartilhado de cálculo').select(1).run()
+            next(b for b in app.button if b.label=='Simular composição').click().run()
+            self.assertEqual(len(app.exception),0)
+            self.assertEqual(payloads[-1]['margin'],'0.35')
+            self.assertEqual(float(payloads[-1]['lines'][0]['minutes']),25)
+            self.assertEqual(payloads[-1]['efficiency'],'0.65')
+
     def test_sheet_list_checkbox_opens_worksheet_and_can_edit_times_and_margin(self):
         from pricing_repository import PricingRepository
         from pricing_service import PricingService

@@ -6,12 +6,13 @@ from html import escape
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+import json
 import pandas as pd
 import streamlit as st
 
 import pricing_items
 from pricing_catalog import CatalogService
-from pricing_sheet_data import COLUMNS,base_label,empty_row,sheet_rows,composition_from_rows
+from pricing_sheet_data import COLUMNS,META,base_label,empty_row,sheet_rows,normalize_rows,composition_from_rows
 from pricing_widgets import selected_rows
 from pricing_workspace import KINDS
 from ui_components import formatar_moeda_brl
@@ -73,7 +74,7 @@ def _view(opened,service,permissions):
     except ValueError as exc:st.error(str(exc));rows={kind:[] for kind in KINDS}
     for kind,label in KINDS.items():
         st.markdown('**'+label.upper()+'**')
-        frame=pd.DataFrame(rows[kind],columns=COLUMNS[kind])
+        frame=pd.DataFrame(rows[kind],columns=COLUMNS[kind]).drop(columns=META,errors='ignore')
         if frame.empty:st.caption('Sem linhas nesta composição.');continue
         if calculation:
             evidence=[line for line in calculation['lines'] if line['input']['kind']==kind]
@@ -96,70 +97,102 @@ def _view(opened,service,permissions):
 
 
 def _edit(opened,service,actor,permissions):
-    row=opened['row'];data=row.get('data',{});catalog=opened['catalog']['bases']
+    row=opened['row'];data=row.get('data',{})
+    catalog=opened['catalog']['bases']
+    if 'working_rows' not in opened:
+        opened['working_rows']=sheet_rows(data,catalog,include_proposals=row.get('status')=='DRAFT')
+        opened['grid_epochs']={kind:0 for kind in KINDS}
     _worksheet_header(opened,data)
+    if st.button('Atualizar preços da folha',key='refresh_sheet_'+opened['token']):
+        fresh=service.repo.catalog()
+        opened['catalog']=fresh;opened['version']=fresh['version'];catalog=fresh['bases']
+        for kind in KINDS:
+            opened['working_rows'][kind]=normalize_rows(opened['working_rows'][kind],catalog[kind],refresh_prices=True)
+            opened['grid_epochs'][kind]+=1
+        opened.pop('calculation',None)
+        st.rerun()
+    st.caption('Atualizar preços carrega os valores centrais e descarta propostas de preço desta edição; tempos, consumos e margem são mantidos.')
     profiles={p['id']:p for p in opened['catalog']['profiles'] if p.get('active',True) or p['id']==data.get('profile_id')}
     options=[None]+list(profiles)
     initial=data.get('profile_id') if data.get('profile_id') in profiles else None
     profile_id=st.selectbox('Perfil compartilhado de cálculo',options,index=options.index(initial),
                            format_func=lambda p:'Parâmetros desta folha' if p is None else profiles[p]['code'],key='sheet_profile_'+opened['token'])
     effective={**data,**(profiles[profile_id]['data'] if profile_id is not None else {})}
-    if profile_id is not None:st.caption('Eficiência, impostos e arredondamento vêm do perfil. Para editá-los somente nesta folha, selecione Parâmetros desta folha.')
-    rows=sheet_rows(data,catalog,include_proposals=row.get('status')=='DRAFT')
-    with st.form('sheet_form_'+opened['token']+'_'+str(profile_id)):
-        cols=st.columns(3)
-        drawing=cols[0].text_input('Código do desenho',value=data.get('drawing_code',''))
-        drawing_revision=cols[1].text_input('Revisão do desenho',value=data.get('drawing_revision',''))
-        source=cols[2].text_input('Referência da fonte',value=data.get('source',''))
-        edited={}
-        for kind,label in KINDS.items():
-            st.markdown('**'+label.upper()+'**')
-            values=rows[kind] or [empty_row()]
-            lookup=[base_label(b) for b in catalog[kind] if b.get('active',True) or any(r.get('Base')==base_label(b) for r in values)]
-            config={'Base':st.column_config.SelectboxColumn('Insumo / processo',options=lookup),
-                    'Unidade':st.column_config.SelectboxColumn(options=UNITS),
-                    'Modo':st.column_config.SelectboxColumn(options=['CONSUMO','BLANK']),
-                    'Etapa':st.column_config.SelectboxColumn(options=['Preparação','Execução']),
-                    'Pessoas':st.column_config.NumberColumn(min_value=1,step=1),
-                    'Preço (R$)':st.column_config.TextColumn('Preço base (R$)',help='Valor compartilhado. Alterar será aplicado ao catálogo ao publicar esta revisão.')}
-            frame=st.data_editor(pd.DataFrame(values,columns=COLUMNS[kind]),key=f'sheet_lines_{opened["token"]}_{kind}_{profile_id}',
-                                 num_rows='dynamic',hide_index=True,width='stretch',column_config=config,
-                                 disabled=['Preço (R$)'] if 'costs' not in permissions else [])
-            edited[kind]=frame.fillna('').to_dict('records')
-        st.markdown('**FORMAÇÃO DO PREÇO — UMA PEÇA**')
-        c=st.columns(4)
-        margin=c[0].number_input('Margem bruta (%)',0.,99.9999,float(Decimal(str(data.get('margin','0')))*100),format='%.4f')
-        taxes=c[1].number_input('Impostos de venda (%)',0.,99.9999,float(Decimal(str(effective.get('taxes','0')))*100),format='%.4f',disabled=profile_id is not None)
-        commission=c[2].number_input('Comissão / taxa (%)',0.,99.9999,float(Decimal(str(data.get('commission','0')))*100),format='%.4f')
-        efficiency=c[3].number_input('Eficiência (%)',0.0001,100.,float(Decimal(str(effective.get('efficiency','1')))*100),format='%.4f',disabled=profile_id is not None)
-        c=st.columns(3)
-        tool_cost=c[0].text_input('Ferramental por peça (R$)',value=str(data.get('tool_cost','0')))
-        rounding=c[1].selectbox('Arredondamento',list(ROUNDINGS),index=list(ROUNDINGS).index(effective.get('rounding','CENT')),format_func=lambda key:ROUNDINGS[key],disabled=profile_id is not None)
-        reviewed=c[2].date_input('Revisão da composição',value=date.fromisoformat(data['reviewed_on']) if data.get('reviewed_on') else _today(),max_value=_today())
-        basis=st.selectbox('Base comercial do PV',list(BASES),index=list(BASES).index(data.get('basis','')),format_func=lambda key:BASES[key])
-        confirmed=st.checkbox('Conferi esta base comercial com o pedido KSB.',value=data.get('confirmed') is True)
-        note=st.text_area('Observações da folha',value=data.get('note',''))
-        st.caption('Tempos, consumos e margem pertencem à folha. Preços editados são propostas de custos compartilhados, aplicadas somente na publicação da revisão.')
-        c=st.columns(2)
-        simulate=c[0].form_submit_button('Simular composição')
-        save=c[1].form_submit_button('Salvar rascunho',type='primary',disabled='edit' not in permissions)
-        if simulate or save:
-            try:
-                lines,proposed=composition_from_rows(edited,catalog,_today())
-                params=dict(lines=lines,proposed_prices=proposed,profile_id=profile_id,
-                            margin=str(Decimal(str(margin))/100),taxes=str(Decimal(str(taxes))/100),commission=str(Decimal(str(commission))/100),
-                            efficiency=str(Decimal(str(efficiency))/100),tool_cost=tool_cost,rounding=rounding,
-                            reviewed_on=reviewed.isoformat(),basis=basis,confirmed=confirmed,note=note,
-                            drawing_code=drawing,drawing_revision=drawing_revision,source=source)
-                if simulate:
-                    _summary(service.preview_draft(opened['code'],params,actor,opened['version'])['calculation'])
-                    if proposed:st.info(f'{len(proposed)} custo(s) compartilhado(s) proposto(s). A publicação recalculará seus dependentes.')
-                if save:
-                    result=service.save_draft(opened['code'],params,actor,opened['version'])
-                    st.session_state.pricing_sheet_pending=dict(id=result['id'],code=opened['code'])
-                    st.session_state.pricing_sheet_success='Rascunho salvo e selecionado. Confira a composição e publique quando estiver pronta.'
-                    st.rerun()
-            except (ValueError,PermissionError) as exc:st.error(str(exc))
+    profile_token=str(profile_id)+'_'+str(profiles[profile_id].get('version',0) if profile_id is not None else 0)
+    if profile_id is not None:st.caption('O perfil fornece eficiência, impostos e arredondamento. Os demais campos continuam próprios desta folha.')
+    key=lambda name:'sheet_'+opened['token']+'_'+name
+    cols=st.columns(3)
+    drawing=cols[0].text_input('Código do desenho',value=data.get('drawing_code',''),key=key('drawing'))
+    drawing_revision=cols[1].text_input('Revisão do desenho',value=data.get('drawing_revision',''),key=key('drawing_revision'))
+    source=cols[2].text_input('Referência da fonte',value=data.get('source',''),key=key('source'))
+    edited={};refresh_needed=False
+    for kind,label in KINDS.items():
+        st.markdown('**'+label.upper()+'**')
+        values=opened['working_rows'][kind] or [empty_row()]
+        lookup=[base_label(b) for b in catalog[kind] if b.get('active',True) or any(r.get('Base')==base_label(b) for r in values)]
+        config={'Base':st.column_config.SelectboxColumn('Insumo / processo',options=lookup),
+                'Unidade':st.column_config.SelectboxColumn('Unidade de consumo',options=UNITS),
+                'Modo':st.column_config.SelectboxColumn(options=['CONSUMO','BLANK']),
+                'Etapa':st.column_config.SelectboxColumn(options=['Preparação','Execução']),
+                'Pessoas':st.column_config.NumberColumn(min_value=1,step=1),
+                'Preço (R$)':st.column_config.TextColumn('Preço proposto (R$)',help='Valor compartilhado. Aplicado ao catálogo somente ao publicar a revisão.')}
+        config.update({field:None for field in META})
+        before=pd.DataFrame(values,columns=COLUMNS[kind]).fillna('')
+        frame=st.data_editor(before,key=f'sheet_lines_{opened["token"]}_{kind}_{opened["grid_epochs"][kind]}',
+                            num_rows='dynamic',hide_index=True,width='stretch',column_config=config,
+                            disabled=META+['Unidade do custo','Custo atual (R$)']+(['Preço (R$)'] if 'costs' not in permissions else []))
+        result=normalize_rows(frame.fillna('').to_dict('records'),catalog[kind])
+        edited[kind]=result;opened['working_rows'][kind]=deepcopy(result)
+        if result!=before.to_dict('records'):
+            opened['grid_epochs'][kind]+=1;refresh_needed=True
+        by_label={base_label(base):base for base in catalog[kind]}
+        for item in result:
+            base=by_label.get(item.get('Base'))
+            if base and item.get('_proposal_version') not in (None,'') and int(item['_proposal_version'])!=base['version']:
+                st.warning('Um preço proposto está vencido. Compare o custo atual e use Atualizar preços da folha antes de propor novo valor.')
+                break
+    st.markdown('**FORMAÇÃO DO PREÇO — UMA PEÇA**')
+    c=st.columns(4)
+    margin=c[0].number_input('Margem bruta (%)',0.,99.9999,float(Decimal(str(data.get('margin','0')))*100),format='%.4f',key=key('margin'))
+    taxes=c[1].number_input('Impostos de venda (%)',0.,99.9999,float(Decimal(str(effective.get('taxes','0')))*100),format='%.4f',disabled=profile_id is not None,key=key('taxes_'+profile_token))
+    commission=c[2].number_input('Comissão / taxa (%)',0.,99.9999,float(Decimal(str(data.get('commission','0')))*100),format='%.4f',key=key('commission'))
+    efficiency=c[3].number_input('Eficiência (%)',0.0001,100.,float(Decimal(str(effective.get('efficiency','1')))*100),format='%.4f',disabled=profile_id is not None,key=key('efficiency_'+profile_token))
+    c=st.columns(3)
+    tool_cost=c[0].text_input('Ferramental por peça (R$)',value=str(data.get('tool_cost','0')),key=key('tool_cost'))
+    rounding=c[1].selectbox('Arredondamento',list(ROUNDINGS),index=list(ROUNDINGS).index(effective.get('rounding','CENT')),format_func=lambda name:ROUNDINGS[name],disabled=profile_id is not None,key=key('rounding_'+profile_token))
+    reviewed=c[2].date_input('Revisão da composição',value=date.fromisoformat(data['reviewed_on']) if data.get('reviewed_on') else _today(),max_value=_today(),key=key('reviewed'))
+    basis=st.selectbox('Base comercial do PV',list(BASES),index=list(BASES).index(data.get('basis','')),format_func=lambda name:BASES[name],key=key('basis'))
+    confirmed=st.checkbox('Conferi esta base comercial com o pedido KSB.',value=data.get('confirmed') is True,key=key('confirmed'))
+    note=st.text_area('Observações da folha',value=data.get('note',''),key=key('note'))
+    st.caption('Tempos, consumos e margem pertencem à folha. Preços propostos são aplicados aos custos compartilhados somente na publicação.')
+    fields=dict(profile_id=profile_id,margin=str(Decimal(str(margin))/100),taxes=str(Decimal(str(taxes))/100),commission=str(Decimal(str(commission))/100),
+                efficiency=str(Decimal(str(efficiency))/100),tool_cost=tool_cost,rounding=rounding,
+                reviewed_on=reviewed.isoformat(),basis=basis,confirmed=confirmed,note=note,
+                drawing_code=drawing,drawing_revision=drawing_revision,source=source)
+    signature=json.dumps(dict(fields=fields,rows=edited),sort_keys=True)
+    c=st.columns(2)
+    simulate=c[0].button('Simular composição',key=key('simulate'))
+    save=c[1].button('Salvar rascunho',type='primary',disabled='edit' not in permissions,key=key('save'))
+    if simulate or save:
+        try:
+            lines,proposed=composition_from_rows(edited,catalog,_today())
+            params=dict(fields,lines=lines,proposed_prices=proposed)
+            if simulate:
+                opened['calculation']=service.preview_draft(opened['code'],params,actor,opened['version'])['calculation']
+                opened['calculation_signature']=signature
+                opened['proposed_count']=len(proposed)
+            if save:
+                result=service.save_draft(opened['code'],params,actor,opened['version'])
+                st.session_state.pricing_sheet_pending=dict(id=result['id'],code=opened['code'])
+                st.session_state.pricing_sheet_success='Rascunho salvo e selecionado. Confira a composição e publique quando estiver pronta.'
+                st.rerun()
+        except (ValueError,PermissionError) as exc:st.error(str(exc))
+    if refresh_needed:st.rerun()
+    if opened.get('calculation'):
+        if opened.get('calculation_signature')==signature:
+            _summary(opened['calculation'])
+            if opened.get('proposed_count'):st.info(f'{opened["proposed_count"]} custo(s) compartilhado(s) proposto(s). A publicação recalculará seus dependentes.')
+        else:st.caption('Há alterações após a última simulação. Simule novamente para conferir o preço.')
 
 
 def render_sheets(actor,service=None):
