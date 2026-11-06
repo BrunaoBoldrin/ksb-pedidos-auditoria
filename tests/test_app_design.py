@@ -400,6 +400,40 @@ class AppDesignTests(unittest.TestCase):
             )
             self.assertEqual(len(exported_items), 301)
 
+    def test_edit_material_with_missing_price_opens_price_field_as_zero(self):
+        material_without_price = (
+            "02100032-0", "CHAPA LISA", "CARB/GALV/INOX/ALU", None, None,
+            "M²", None, "CR220100200100", None,
+            None, None,
+        )
+        with patch.object(
+            database,
+            "listar_materiais_completo",
+            return_value=[material_without_price],
+        ):
+            at = self.app()
+            at.sidebar.button(key="nav_📦 Itens Cadastrados").click().run()
+            at.session_state["modo_material"] = "editar"
+            at.session_state["material_em_edicao"] = pd.Series({
+                column: value
+                for column, value in zip(
+                    [
+                        "Código Material", "Descrição", "Material", "Norma", "NCM",
+                        "Unidade", "Código Interno Jundiaí", "Código Interno Várzea",
+                        "Preço Unitário Líquido", "Última Revisão", "Usuário Última Revisão",
+                    ],
+                    material_without_price,
+                )
+            })
+            at.run()
+
+            self.assertEqual(len(at.exception), 0)
+            price_input = next(
+                input_ for input_ in at.number_input
+                if input_.label == "Preço Unitário Líquido"
+            )
+            self.assertEqual(price_input.value, 0.0)
+
     def test_price_tables_display_brazilian_currency(self):
         material = (
             "001492536", "PROTETOR ACOPL", "LATÃO", "BRN66/C08", "7419.80.90",
