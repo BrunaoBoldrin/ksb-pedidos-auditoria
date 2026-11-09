@@ -55,10 +55,6 @@ def _worksheet_header(opened,data):
     row=opened['row'];revision=row.get('number','Nova')
     title=escape(str(opened['code'] or 'Novo item'))
     description=escape(str(row.get('descricao','')))
-    if data.get('import_source_sha256') and st.button('Conferir Excel de origem',key='source_'+opened['token']):
-        st.session_state.excel_source_request=data['import_source_sha256']
-        st.session_state.pricing_area='Conferência Excel'
-        st.rerun()
     st.markdown(f'''<section style="border:1px solid #b9cce9;border-radius:8px;overflow:hidden;margin:18px 0">
       <div style="background:#0b3c7c;color:white;padding:14px 18px;font-weight:700;letter-spacing:.05em">FOLHA DE PROCESSO — 1 PEÇA</div>
       <div style="display:flex;justify-content:space-between;gap:16px;background:#edf3fc;padding:14px 18px;color:#14385e">
