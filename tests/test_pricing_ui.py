@@ -7,6 +7,29 @@ import pricing_items
 
 
 class PricingScreensTests(unittest.TestCase):
+    def test_pricing_tab_navigation_collects_last_cost_edit_before_hiding_grid(self):
+        from pricing_repository import PricingRepository
+        from pricing_catalog import CatalogService
+        base=dict(id=1,code='PARAFUSO',description='Parafuso',unit='UN',price='10',factor='1',
+                  kg_m2=None,length_mm=None,active=True,per_person=True,version=1,
+                  reviewed_on='2026-11-01',note='',usage_count=0)
+        snapshot=dict(version=8,bases=dict(material=[],component=[base],process=[],service=[]),profiles=[])
+        with patch.object(PricingRepository,'catalog',side_effect=lambda:deepcopy(snapshot)), \
+             patch.object(PricingRepository,'sheets',return_value=[]), \
+             patch.object(CatalogService,'permissions',return_value={'view','costs'}):
+            app=AppTest.from_string('from pricing_ui import render_pricing\nrender_pricing("admin")',default_timeout=15).run()
+            next(b for b in app.button if b.label=='Central de custos').click().run()
+            grid=next(d for d in app.dataframe if '_grid_component_' in str(d.key))
+            app.session_state[grid.key]={'edited_rows':{0:{'Preço (R$)':'13,25'}},'added_rows':[],'deleted_rows':[]}
+            # No intermediate rerun: the route change must collect browser-held edits.
+            next(b for b in app.button if b.label=='Folhas de processo').click().run()
+            self.assertEqual(len(app.exception),0)
+            next(b for b in app.button if b.label=='Central de custos').click().run()
+            self.assertEqual(len(app.exception),0)
+            grid=next(d for d in app.dataframe if '_grid_component_' in str(d.key))
+            self.assertEqual(grid.value.iloc[0]['Preço (R$)'],'13,25')
+            self.assertEqual(base['price'],'10')
+
     def test_returning_to_editor_refreshes_changed_ncm_and_costs_without_losing_edits(self):
         from pricing_repository import PricingRepository
         from pricing_catalog import CatalogService
@@ -121,83 +144,9 @@ class PricingScreensTests(unittest.TestCase):
             self.assertEqual(len(app.exception),0)
             self.assertTrue(any(n.label=='Margem bruta (%)' for n in app.number_input))
             self.assertTrue(any('Minutos' in d.value.columns for d in app.dataframe))
-    def test_unified_form_keeps_edits_adds_field_and_saves_all_once(self):
-        from pricing_catalog import CatalogService
-        from pricing_repository import PricingRepository
-        def base(id,code,price):return dict(id=id,code=code,description=code,unit='UN',price=price,factor='1',reviewed_on='2026-11-01',active=True,per_person=True,version=1,note='',usage_count=0)
-        snapshot=dict(version=8,bases=dict(component=[base(1,'PARAFUSO','10'),base(2,'PORCA','2')],material=[],process=[],service=[]),
-                      profiles=[dict(id=1,code='GERAL',data=dict(efficiency='1',taxes='0.3',rounding='CENT'),active=True,reviewed_on='2026-11-01',version=1,usage_count=0)])
-        saved=[]
-        def publish(changes,profiles,deletions,actor,version,reason,key):
-            saved.append((changes,profiles,version));return dict(count=2)
-        with patch.object(PricingRepository,'catalog',return_value=snapshot), \
-             patch.object(CatalogService,'permissions',return_value={'view','costs'}), \
-             patch.object(CatalogService,'publish_catalog',side_effect=publish):
-            source='import streamlit as st\nfrom pricing_catalog_ui import render_catalog\narea=st.radio("Tela",["Central","Outra"],key="central_test_route")\nif area=="Central":render_catalog("admin")'
-            app=AppTest.from_string(source,default_timeout=15).run()
-            self.assertEqual(len(app.exception),0)
-            self.assertEqual(len(app.dataframe),0)
-            next(t for t in app.text_input if t.label=='PARAFUSO (R$/un)').set_value('13').run()
-            next(t for t in app.text_input if t.label=='PORCA (R$/un)').set_value('3,50').run()
-            self.assertFalse(any('Tributos de venda' in t.label for t in app.text_input))
-            next(t for t in app.text_input if t.label=='Nome do novo campo').set_value('ARRUELA')
-            next(t for t in app.text_input if t.label=='Preço inicial (R$)').set_value('4')
-            next(b for b in app.button if b.label=='Adicionar campo').click().run()
-            self.assertEqual(len(app.exception),0)
-            self.assertEqual(next(t for t in app.text_input if t.label=='PARAFUSO (R$/un)').value,'13')
-            self.assertTrue(any(t.label=='ARRUELA (R$/un)' for t in app.text_input))
-            self.assertEqual(saved,[])
-            app.radio(key='central_test_route').set_value('Outra').run()
-            app.radio(key='central_test_route').set_value('Central').run()
-            self.assertEqual(next(t for t in app.text_input if t.label=='PORCA (R$/un)').value,'3,50')
-            next(b for b in app.button if b.label=='Salvar alterações').click().run()
-            self.assertEqual(len(app.exception),0)
-            self.assertEqual([r['price'] for _,r in saved[0][0]],['13','3.50','4'])
-            self.assertEqual(saved[0][1],[])
-            self.assertEqual(saved[0][2],8)
-            self.assertTrue(any('2 itens' in s.value for s in app.success))
 
-    def test_referenced_form_field_cannot_be_removed_but_its_price_is_editable(self):
-        from pricing_catalog import CatalogService
-        from pricing_repository import PricingRepository
-        base=dict(id=1,code='PARAFUSO',description='Parafuso X',unit='UN',price='10',factor='1',active=True,per_person=True,version=1,reviewed_on='2026-11-01',note='',usage_count=2)
-        with patch.object(PricingRepository,'catalog',return_value=dict(version=8,bases=dict(component=[base],material=[],process=[],service=[]),profiles=[])), \
-             patch.object(CatalogService,'permissions',return_value={'view','costs'}):
-            app=AppTest.from_string('from pricing_catalog_ui import render_catalog\nrender_catalog("admin")',default_timeout=15).run()
-            self.assertEqual(len(app.exception),0)
-            self.assertFalse(next(t for t in app.text_input if t.label=='Parafuso X (R$/un)').disabled)
-            self.assertTrue(next(c for c in app.checkbox if c.label=='Remover campo').disabled)
-            self.assertTrue(any('vinculado' in c.value.lower() for c in app.caption))
 
-    def test_free_form_field_removal_is_sent_only_on_save(self):
-        from pricing_catalog import CatalogService
-        from pricing_repository import PricingRepository
-        base=dict(id=1,code='LIVRE',description='Campo livre',unit='UN',price='10',factor='1',active=True,per_person=True,version=1,reviewed_on='2026-11-01',note='',usage_count=0)
-        saved=[]
-        def publish(changes,profiles,deletions,actor,version,reason,key):
-            saved.append(deletions);return dict(count=0)
-        with patch.object(PricingRepository,'catalog',return_value=dict(version=8,bases=dict(component=[base],material=[],process=[],service=[]),profiles=[])), \
-             patch.object(CatalogService,'permissions',return_value={'view','costs'}), \
-             patch.object(CatalogService,'publish_catalog',side_effect=publish):
-            app=AppTest.from_string('from pricing_catalog_ui import render_catalog\nrender_catalog("admin")',default_timeout=15).run()
-            next(c for c in app.checkbox if c.label=='Remover campo').check().run()
-            self.assertEqual(saved,[])
-            next(b for b in app.button if b.label=='Salvar alterações').click().run()
-            self.assertEqual(len(app.exception),0)
-            self.assertEqual(saved,[[('component',1)]])
 
-    def test_invalid_form_value_is_retained_after_save_failure(self):
-        from pricing_catalog import CatalogService
-        from pricing_repository import PricingRepository
-        base=dict(id=1,code='P',description='Parafuso',unit='UN',price='10',factor='1',active=True,per_person=True,version=1,reviewed_on='2026-11-01',note='',usage_count=0)
-        with patch.object(PricingRepository,'catalog',return_value=dict(version=8,bases=dict(component=[base],material=[],process=[],service=[]),profiles=[])), \
-             patch.object(CatalogService,'permissions',return_value={'view','costs'}):
-            app=AppTest.from_string('from pricing_catalog_ui import render_catalog\nrender_catalog("admin")',default_timeout=15).run()
-            next(t for t in app.text_input if t.label=='Parafuso (R$/un)').set_value('inválido').run()
-            next(b for b in app.button if b.label=='Salvar alterações').click().run()
-            self.assertEqual(len(app.exception),0)
-            self.assertEqual(next(t for t in app.text_input if t.label=='Parafuso (R$/un)').value,'inválido')
-            self.assertTrue(app.error)
 
     def test_saved_draft_opens_immediately_for_review_without_manual_refresh(self):
         from pricing_repository import PricingRepository
@@ -258,7 +207,7 @@ class PricingScreensTests(unittest.TestCase):
             self.assertEqual(len(app.exception),0)
             self.assertEqual(len(app.radio),0)
             next(b for b in app.button if b.label=='Central de custos').click().run()
-            self.assertTrue(any(b.label=='Salvar alterações' for b in app.button))
+            self.assertTrue(any(b.label=='Salvar tudo' for b in app.button))
             self.assertFalse(any('perfil' in b.label.lower() for b in app.button))
             next(b for b in app.button if b.label=='Folhas de processo').click().run()
             self.assertTrue(any(b.label=='Nova folha' for b in app.button))

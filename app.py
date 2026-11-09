@@ -686,6 +686,9 @@ if st.session_state.usuario_logado is None:
     st.stop()
 
 perfil = st.session_state.perfil_usuario
+if f'grid_catalog_workspace_{st.session_state.usuario_logado}' in st.session_state:
+    from pricing_catalog_ui import capture_catalog_draft
+    capture_catalog_draft(st.session_state.usuario_logado)
 usuario_revisao_atual = st.session_state.nome_usuario or st.session_state.usuario_logado
 configuracoes_sistema = buscar_configuracoes_sistema()
 opcoes_menu = menu_options_for_profile(perfil)
