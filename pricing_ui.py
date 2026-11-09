@@ -129,13 +129,16 @@ def render_pricing(actor,review_days=90,permissions=None):
     except PermissionError as exc:_error(exc);return
     if 'view' not in permissions:st.error('Você não tem autorização para consultar custos e composição.');return
     from pricing_widgets import button_navigation
-    area=button_navigation(['Folhas de processo','Central de custos','Revisões e pendências','Histórico'],'pricing_area')
+    area=button_navigation(['Folhas de processo','Central de custos','Conferência Excel','Revisões e pendências','Histórico'],'pricing_area')
     if area=='Folhas de processo':
         from pricing_sheets_ui import render_sheets
         render_sheets(actor,service,permissions)
     elif area=='Central de custos':
         from pricing_catalog_ui import render_catalog
         render_catalog(actor,service,permissions)
+    elif area=='Conferência Excel':
+        from pricing_excel_ui import render_excel_sources
+        render_excel_sources(actor, permissions=permissions)
     elif area=='Revisões e pendências':
         items=pricing_items.list_items();refs=repo.references([r[0] for r in items])['items']
         pending=[];active=0

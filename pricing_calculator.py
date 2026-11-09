@@ -124,7 +124,16 @@ def calculate_sheet(sheet: Mapping, bases: Mapping, fiscal_divisor=None) -> Pric
         evidence.append(dict(input=dict(line), base=dict(item), amount=amount, nominal_cost=cost))
     subtotals['process_nominal'] = subtotals['process']
     subtotals['process'] /= efficiency
-    subtotals['tool'] = number(sheet.get('tool_cost', '0'), 'Amortização unitária')
+    tooling = sheet.get('tooling', [])
+    if not isinstance(tooling, list) or len(tooling) > 100:
+        raise PricingError('Lista de ferramental inválida.')
+    subtotals['tool'] = Decimal('0') if tooling else number(sheet.get('tool_cost', '0'), 'Amortização unitária')
+    for tool in tooling:
+        if not isinstance(tool, dict) or not str(tool.get('description') or '').strip():
+            raise PricingError('Informe a descrição do ferramental.')
+        number(tool.get('annual_quantity') or '0', 'Quantidade anual')
+        quantity = number(tool.get('amortization_quantity'), 'Base da amortização', Decimal('0.000001'))
+        subtotals['tool'] += number(tool.get('cost'), 'Custo do ferramental') / quantity
     total = sum(subtotals[k] for k in ('material','component','process','service','tool'))
     if total <= 0 or total > Decimal('1000000000000'):
         raise PricingError('O custo total da peça deve ser positivo e estar dentro do limite.')
