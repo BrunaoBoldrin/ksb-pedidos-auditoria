@@ -9,7 +9,7 @@ Implementar na interface existente. A avaliação de substituição do Streamlit
 ## Etapas
 
 1. Proteger o contrato de edição em testes: quatro grupos, múltiplas linhas novas, última célula preservada ao adicionar/navegar, envio único, erro/conflito mantendo rascunho, remoção protegida e consulta sem permissão de escrita.
-2. Substituir cartões/ficha de inclusão por grades com identidades estáveis. Capturar deltas antes de ações, regenerar grades só quando estrutura muda; inclusão começa vazia e validação ocorre no salvamento. Preservar custos ocultos, versão original, códigos editáveis e defaults. Bloquear remoção de referências conhecidas ou desconhecidas antes de enviá-la ao serviço; servidor continua sendo autoridade.
+2. Substituir cartões/ficha de inclusão por grades com identidades estáveis. Manter a edição de células no navegador, sem recarregar a cada digitação; capturar deltas antes de ações e navegação. Regenerar grades só quando estrutura ou configuração muda; inclusão começa vazia e validação ocorre no salvamento. Preservar custos ocultos, versão original, códigos editáveis e defaults. Bloquear remoção de referências conhecidas ou desconhecidas antes de enviá-la ao serviço; servidor continua sendo autoridade.
 3. Executar suíte completa, verificar visualmente com dados sintéticos e revisar a alteração de forma independente. Cobrir recálculo/atomicidade com os testes PostgreSQL existentes e casos adicionais se necessários.
 4. Commit e PR destinados a `teste`; aguardar CI, integrar e verificar deploy do ambiente isolado de teste. Manter `main` e banco de produção intactos.
 

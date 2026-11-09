@@ -121,6 +121,8 @@ def _show_calculation(data):
 
 def render_pricing(actor,review_days=90,permissions=None):
     from pricing_catalog import CatalogService
+    from pricing_catalog_ui import capture_catalog_draft
+    capture_catalog_draft(actor)
     page_header('Precificação','Folhas por peça e manutenção dos custos compartilhados.')
     service=CatalogService();repo=service.repo
     try:permissions=service.permissions(actor) if permissions is None else permissions

@@ -88,6 +88,14 @@ def _capture(state_key, token):
             workspace.pop('impact', None)
 
 
+def capture_catalog_draft(actor):
+    """Collect deferred cell edits before a button changes the current page."""
+    state_key = f'grid_catalog_workspace_{actor}'
+    workspace = st.session_state.get(state_key)
+    if workspace:
+        _capture(state_key, workspace['key'])
+
+
 def _reset_grid(workspace, kind):
     workspace['grids'].pop(kind, None)
     workspace['epoch'] += 1
@@ -98,9 +106,12 @@ def _structure_action(context, kind, remove=False):
     workspace = context['workspace']
     if remove:
         selected = [row for row in _rows(workspace, kind) if row['Selecionar']]
-        if not selected or any(_usage(row, workspace) != 0 for row in selected):
+        if not selected:
+            st.info('Selecione as linhas que deseja remover.')
+            return False
+        if any(_usage(row, workspace) != 0 for row in selected):
             st.error('Custos vinculados a folhas ou histórico não podem ser removidos. Recarregue os valores se os vínculos estiverem indisponíveis.')
-            return
+            return False
         keys = {row['_key'] for row in selected}
         for row in selected:
             old = workspace['originals'].get(row['_key'])
@@ -111,6 +122,7 @@ def _structure_action(context, kind, remove=False):
         workspace['costs'].append(_blank(kind))
     workspace.pop('impact', None)
     _reset_grid(workspace, kind)
+    return True
 
 
 def _grid(context, kind, editable, technical):
@@ -162,7 +174,7 @@ def _grid(context, kind, editable, technical):
                        hide_index=True, width='stretch', height='auto', row_height=38,
                        column_config=config, column_order=columns,
                        disabled=['_key', 'Categoria', 'Vínculos'] if editable else True,
-                       on_change=_capture, args=(context['state_key'], workspace['key']))
+                       on_change='ignore')
         _capture(context['state_key'], workspace['key'])
         selected = [row for row in _rows(workspace, kind) if row['Selecionar']]
         protected = any(_usage(row, workspace) != 0 for row in selected)
@@ -171,9 +183,9 @@ def _grid(context, kind, editable, technical):
             _structure_action(context, kind)
             st.rerun()
         if actions[1].button('Remover selecionados · ' + TITLES[kind], key=context['prefix'] + '_remove_' + kind,
-                             disabled=not editable or not selected or protected):
-            _structure_action(context, kind, remove=True)
-            st.rerun()
+                             disabled=not editable):
+            if _structure_action(context, kind, remove=True):
+                st.rerun()
         if protected:
             actions[2].caption('Remoção bloqueada: custo vinculado ou vínculos indisponíveis.')
         else:

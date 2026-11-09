@@ -7,6 +7,29 @@ import pricing_items
 
 
 class PricingScreensTests(unittest.TestCase):
+    def test_pricing_tab_navigation_collects_last_cost_edit_before_hiding_grid(self):
+        from pricing_repository import PricingRepository
+        from pricing_catalog import CatalogService
+        base=dict(id=1,code='PARAFUSO',description='Parafuso',unit='UN',price='10',factor='1',
+                  kg_m2=None,length_mm=None,active=True,per_person=True,version=1,
+                  reviewed_on='2026-11-01',note='',usage_count=0)
+        snapshot=dict(version=8,bases=dict(material=[],component=[base],process=[],service=[]),profiles=[])
+        with patch.object(PricingRepository,'catalog',side_effect=lambda:deepcopy(snapshot)), \
+             patch.object(PricingRepository,'sheets',return_value=[]), \
+             patch.object(CatalogService,'permissions',return_value={'view','costs'}):
+            app=AppTest.from_string('from pricing_ui import render_pricing\nrender_pricing("admin")',default_timeout=15).run()
+            next(b for b in app.button if b.label=='Central de custos').click().run()
+            grid=next(d for d in app.dataframe if '_grid_component_' in str(d.key))
+            app.session_state[grid.key]={'edited_rows':{0:{'Preço (R$)':'13,25'}},'added_rows':[],'deleted_rows':[]}
+            # No intermediate rerun: the route change must collect browser-held edits.
+            next(b for b in app.button if b.label=='Folhas de processo').click().run()
+            self.assertEqual(len(app.exception),0)
+            next(b for b in app.button if b.label=='Central de custos').click().run()
+            self.assertEqual(len(app.exception),0)
+            grid=next(d for d in app.dataframe if '_grid_component_' in str(d.key))
+            self.assertEqual(grid.value.iloc[0]['Preço (R$)'],'13,25')
+            self.assertEqual(base['price'],'10')
+
     def test_returning_to_editor_refreshes_changed_ncm_and_costs_without_losing_edits(self):
         from pricing_repository import PricingRepository
         from pricing_catalog import CatalogService

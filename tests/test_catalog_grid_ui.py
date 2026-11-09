@@ -30,7 +30,7 @@ class CatalogGridTests(unittest.TestCase):
         self.stack.enter_context(patch.object(PricingRepository,'catalog',side_effect=lambda:deepcopy(self.snapshot)))
         self.stack.enter_context(patch.object(CatalogService,'permissions',side_effect=lambda actor:self.permissions))
         self.stack.enter_context(patch.object(CatalogService,'publish_catalog',side_effect=publish))
-        self.source='import streamlit as st\nfrom pricing_catalog_ui import render_catalog\npage=st.radio("Tela",["Central","Outra"],key="test_route")\nif page=="Central":render_catalog("admin")'
+        self.source='import streamlit as st\nfrom pricing_catalog_ui import render_catalog,capture_catalog_draft\npage=st.radio("Tela",["Central","Outra"],key="test_route")\ncapture_catalog_draft("admin")\nif page=="Central":render_catalog("admin")'
 
     def app(self):
         app=AppTest.from_string(self.source,default_timeout=20).run()
@@ -73,7 +73,7 @@ class CatalogGridTests(unittest.TestCase):
 
     def test_navigation_and_technical_columns_keep_last_cell_and_hidden_precision(self):
         app=self.app()
-        self.edit(app,'component',{0:{'Preço (R$)':'13'}});app.run()
+        self.edit(app,'component',{0:{'Preço (R$)':'13'}})
         app.radio(key='test_route').set_value('Outra').run()
         app.radio(key='test_route').set_value('Central').run()
         self.assertEqual(self.draft(app,'component')[0]['Preço (R$)'],'13')
@@ -91,7 +91,9 @@ class CatalogGridTests(unittest.TestCase):
                 self.snapshot['bases']['component'][0]['usage_count']=usage
                 app=self.app()
                 self.edit(app,'component',{0:{'Selecionar':True,'Preço (R$)':'13'}});app.run()
-                self.assertTrue(self.button(app,'Remover selecionados · Componentes').disabled)
+                self.button(app,'Remover selecionados · Componentes').click().run()
+                self.assertTrue(app.error)
+                self.assertEqual(len(self.draft(app,'component')),2)
                 self.button(app,'Salvar tudo').click().run()
                 self.assertEqual(self.saved[-1]['deletions'],[])
                 self.assertEqual(self.saved[-1]['changes'][0][1]['price'],'13')
