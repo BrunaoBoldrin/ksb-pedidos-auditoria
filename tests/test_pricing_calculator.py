@@ -18,6 +18,15 @@ def sheet(lines, **kwargs):
 
 
 class CalculatorTests(unittest.TestCase):
+    def test_tooling_uses_explicit_amortization_quantity_without_double_legacy_cost(self):
+        row=dict(kind='component',base_id=1,quantity='1',consumption='1',unit='UN')
+        data=sheet([row],tool_cost='999',tooling=[dict(description='Matriz',annual_quantity='1000',cost='600',amortization_quantity='200')])
+        result=calculate_sheet(data,{('component',1):base('10','UN')})
+        self.assertEqual(result.cost,Decimal('13'))
+        self.assertEqual(result.breakdown['tool'],Decimal('3'))
+        data['tooling'][0]['amortization_quantity']='0'
+        with self.assertRaises(PricingError):calculate_sheet(data,{('component',1):base('10','UN')})
+
     def test_time_efficiency_and_people_are_applied_once(self):
         row = dict(kind='process', base_id=1, minutes='6', hours='0', people=2)
         result = calculate_sheet(sheet([row], efficiency='0.65'),

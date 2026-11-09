@@ -12,7 +12,7 @@ import streamlit as st
 
 import pricing_items
 from pricing_catalog import CatalogService
-from pricing_sheet_data import COLUMNS,META,base_label,empty_row,sheet_rows,normalize_rows,composition_from_rows
+from pricing_sheet_data import COLUMNS,META,TOOL_COLUMNS,base_label,empty_row,sheet_rows,normalize_rows,composition_from_rows,tooling_rows,tooling_from_rows
 from pricing_widgets import selected_rows
 from pricing_workspace import KINDS
 from ui_components import formatar_moeda_brl
@@ -55,6 +55,10 @@ def _worksheet_header(opened,data):
     row=opened['row'];revision=row.get('number','Nova')
     title=escape(str(opened['code'] or 'Novo item'))
     description=escape(str(row.get('descricao','')))
+    if data.get('import_source_sha256') and st.button('Conferir Excel de origem',key='source_'+opened['token']):
+        st.session_state.excel_source_request=data['import_source_sha256']
+        st.session_state.pricing_area='Conferência Excel'
+        st.rerun()
     st.markdown(f'''<section style="border:1px solid #b9cce9;border-radius:8px;overflow:hidden;margin:18px 0">
       <div style="background:#0b3c7c;color:white;padding:14px 18px;font-weight:700;letter-spacing:.05em">FOLHA DE PROCESSO — 1 PEÇA</div>
       <div style="display:flex;justify-content:space-between;gap:16px;background:#edf3fc;padding:14px 18px;color:#14385e">
@@ -65,6 +69,7 @@ def _view(opened,service,permissions):
     row=opened['row'];data=row.get('data',{})
     _worksheet_header(opened,data)
     st.caption(f'Desenho: {data.get("drawing_code") or "—"} · Revisão do desenho: {data.get("drawing_revision") or "—"} · Fonte: {data.get("source") or "—"}')
+    st.caption(f'Cliente: {data.get("customer") or "—"} · Vendedor: {data.get("seller") or "—"} · Produto: {data.get("product") or "—"} · Tipo de orçamento: {data.get("quote_type") or "—"}')
     calculation=None
     try:
         if row.get('snapshot_id') and row.get('status')=='ARCHIVED':calculation=service.repo.snapshot(row['snapshot_id'])
@@ -96,6 +101,10 @@ def _view(opened,service,permissions):
                 frame['Consumo calculado']=[str(line['amount']) for line in evidence]
                 frame['Custo da linha (R$)']=[_money(line['nominal_cost']) for line in evidence]
         st.dataframe(frame,hide_index=True,width='stretch')
+    if data.get('tooling'):
+        st.markdown('**FERRAMENTAL**')
+        st.dataframe(pd.DataFrame(tooling_rows(data),columns=TOOL_COLUMNS),hide_index=True,width='stretch')
+        st.caption('A quantidade anual é informativa. O custo total é dividido pela quantidade para amortização.')
     st.markdown('**FORMAÇÃO DO PREÇO**')
     parameters=calculation.get('parameters',{}) if calculation else {}
     values={**data,**parameters}
@@ -132,6 +141,11 @@ def _edit(opened,service,actor,permissions):
     drawing=cols[0].text_input('Código do desenho',value=data.get('drawing_code',''),key=key('drawing'))
     drawing_revision=cols[1].text_input('Revisão do desenho',value=data.get('drawing_revision',''),key=key('drawing_revision'))
     source=cols[2].text_input('Referência da fonte',value=data.get('source',''),key=key('source'))
+    cols=st.columns(4)
+    customer=cols[0].text_input('Cliente',value=data.get('customer',''),key=key('customer'))
+    seller=cols[1].text_input('Vendedor',value=data.get('seller',''),key=key('seller'))
+    product=cols[2].text_input('Produto da folha',value=data.get('product',''),key=key('product'))
+    quote_type=cols[3].text_input('Tipo de orçamento',value=data.get('quote_type',''),key=key('quote_type'),help='Identificação usada na fonte, como integral ou mão de obra.')
     edited={};refresh_needed=False
     for kind,label in KINDS.items():
         st.markdown('**'+label.upper()+'**')
@@ -158,6 +172,18 @@ def _edit(opened,service,actor,permissions):
             if base and item.get('_proposal_version') not in (None,'') and int(item['_proposal_version'])!=base['version']:
                 st.warning('Um preço proposto está vencido. Compare o custo atual e use Atualizar preços da folha antes de propor novo valor.')
                 break
+    st.markdown('**FERRAMENTAL**')
+    if 'working_tooling' not in opened:
+        opened['working_tooling']=tooling_rows(data)
+        opened['tooling_epoch']=0
+    tools_before=pd.DataFrame(opened['working_tooling'],columns=TOOL_COLUMNS).fillna('')
+    tools_frame=st.data_editor(tools_before,key=key('tooling')+'_'+str(opened['tooling_epoch']),num_rows='dynamic',hide_index=True,width='stretch',
+                               column_config={label:st.column_config.TextColumn(label) for label in TOOL_COLUMNS})
+    tools_edited=tools_frame.fillna('').to_dict('records')
+    opened['working_tooling']=deepcopy(tools_edited)
+    if tools_edited!=tools_before.to_dict('records'):
+        opened['tooling_epoch']+=1;refresh_needed=True
+    st.caption('Quantidade anual: informação da folha. Quantidade para amortização: número de peças que divide o custo da ferramenta; use 1 para cobrar tudo em uma peça.')
     st.markdown('**FORMAÇÃO DO PREÇO — UMA PEÇA**')
     c=st.columns(4)
     margin=c[0].number_input('Margem bruta (%)',0.,99.9999,float(Decimal(str(data.get('margin','0')))*100),format='%.4f',key=key('margin'))
@@ -165,17 +191,20 @@ def _edit(opened,service,actor,permissions):
     commission=c[2].number_input('Comissão / taxa (%)',0.,99.9999,float(Decimal(str(data.get('commission','0')))*100),format='%.4f',key=key('commission'))
     efficiency=c[3].number_input('Eficiência (%)',0.0001,100.,float(Decimal(str(data.get('efficiency','1')))*100),format='%.4f',key=key('efficiency'))
     c=st.columns(3)
-    tool_cost=c[0].text_input('Ferramental por peça (R$)',value=str(data.get('tool_cost','0')),key=key('tool_cost'))
+    has_tooling=any(any(str(value).strip() for value in entry.values()) for entry in tools_edited)
+    tool_cost=c[0].text_input('Ferramental por peça (R$)',value=str(data.get('tool_cost','0')),key=key('tool_cost'),disabled=has_tooling,
+                              help='Valor direto das folhas anteriores. Quando a tabela de ferramental estiver preenchida, o cálculo usa os custos e quantidades dessa tabela.')
     rounding=c[1].selectbox('Arredondamento',list(ROUNDINGS),index=list(ROUNDINGS).index(data.get('rounding','CENT')),format_func=lambda name:ROUNDINGS[name],key=key('rounding'))
     reviewed=c[2].date_input('Revisão da composição',value=date.fromisoformat(data['reviewed_on']) if data.get('reviewed_on') else _today(),max_value=_today(),key=key('reviewed'))
     note=st.text_area('Observações da folha',value=data.get('note',''),key=key('note'))
     st.caption('Tempos, consumos e margem pertencem à folha. Preços propostos são aplicados aos custos compartilhados somente na publicação.')
-    fields=dict(margin=str(Decimal(str(margin))/100),commission=str(Decimal(str(commission))/100),
+    fields=dict(data,margin=str(Decimal(str(margin))/100),commission=str(Decimal(str(commission))/100),
                 efficiency=str(Decimal(str(efficiency))/100),tool_cost=tool_cost,rounding=rounding,
                 reviewed_on=reviewed.isoformat(),tax_source='NCM',note=note,
-                drawing_code=drawing,drawing_revision=drawing_revision,source=source)
+                drawing_code=drawing,drawing_revision=drawing_revision,source=source,
+                customer=customer,seller=seller,product=product,quote_type=quote_type)
     opened['working_fields']=deepcopy(fields)
-    signature=json.dumps(dict(fields=fields,rows=edited),sort_keys=True)
+    signature=json.dumps(dict(fields=fields,rows=edited,tooling=tools_edited),sort_keys=True)
     if service.repo.version()!=opened['version']:
         fresh=service.repo.catalog()
         for kind in KINDS:
@@ -204,6 +233,9 @@ def _edit(opened,service,actor,permissions):
     if simulate or save or opened.get('calculation_signature')!=signature:
         try:
             lines,proposed=composition_from_rows(edited,catalog,_today())
+            tools=tooling_from_rows(tools_edited)
+            fields['tooling']=tools
+            opened['working_fields']['tooling']=deepcopy(tools)
             params=dict(fields,lines=lines,proposed_prices=proposed)
             if save:
                 result=service.save_draft(opened['code'],params,actor,opened['version'])
