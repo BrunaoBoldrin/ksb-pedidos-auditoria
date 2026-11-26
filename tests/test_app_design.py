@@ -114,6 +114,25 @@ class AppDesignTests(unittest.TestCase):
         ))
         self.assertIn("PREÇO NECESSITA DE REVISÃO: ATUALIZE O VALOR DO ITEM.", html)
 
+    def test_data_da_ultima_revisao_aparece_no_resumo_de_cada_item(self):
+        at = self.cached_app()
+        dados, analise = at.session_state["resultados_processados"][0]
+        analise = analise.copy()
+        analise["Data Última Revisão Preço"] = ["2025-01-10", "2026-11-03"]
+        sem_revisao = analise.iloc[[0]].assign(Item="00030")
+        sem_revisao["Data Última Revisão Preço"] = None
+        sem_revisao["Status Comercial"] = "PENDENTE - PREÇO NÃO CADASTRADO"
+        analise = pd.concat([analise, sem_revisao], ignore_index=True)
+        at.session_state["resultados_processados"] = [(dados, analise)]
+
+        at.run()
+
+        self.assertEqual(len(at.exception), 0)
+        self.assertEqual(
+            [metric.value for metric in at.metric if metric.label == "Última revisão de preço"],
+            ["2026-11-03", "2025-01-10", "Não registrada"],
+        )
+
     def test_preco_unitario_com_impostos_usa_cadastro_mesmo_com_quantidade_zero(self):
         at = self.cached_app()
         dados, analise = at.session_state["resultados_processados"][0]
