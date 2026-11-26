@@ -318,7 +318,7 @@ def exibir_cards_auditoria(df_analise_final):
             st.markdown(cabecalho_item_html(linha), unsafe_allow_html=True)
             with st.container(border=True):
                 preco_cadastrado_impostos = linha.get("Preço Cadastrado c/ Imposto")
-                destaques = st.columns(3)
+                destaques = st.columns(4)
                 destaques[0].metric("Código Glória", selecionar_codigo_gloria(linha))
                 destaques[1].metric(
                     "Preço unitário com impostos",
@@ -329,6 +329,10 @@ def exibir_cards_auditoria(df_analise_final):
                 destaques[2].metric(
                     "Prazo de entrega",
                     formatar_prazo_entrega(linha.get("Data Entrega")),
+                )
+                destaques[3].metric(
+                    "Última revisão de preço",
+                    valor_texto(linha, "Data Última Revisão Preço", "Não registrada"),
                 )
 
                 fiscal_col, comercial_col = st.columns(2)
